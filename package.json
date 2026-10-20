@@ -1,0 +1,28 @@
+{
+  "name": "openai-compatible-api",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build --mode client && vite build",
+    "start": "cd dist && node index.js"
+  },
+  "private": true,
+  "dependencies": {
+    "@lobehub/icons": "^6.0.0",
+    "@lobehub/icons-static-svg": "^1.95.1",
+    "dayjs": "^1.11.23",
+    "eruda": "^3.4.3",
+    "heroicons": "^2.2.0",
+    "hono": "^4.13.13",
+    "honox": "0.1.61"
+  },
+  "devDependencies": {
+    "@hono/vite-build": "^1.11.1",
+    "@hono/vite-dev-server": "^0.26.1",
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/node": "^26.6.5",
+    "daisyui": "^5.7.50",
+    "tailwindcss": "^4.3.2",
+    "vite": "^8.1.4"
+  }
+}
