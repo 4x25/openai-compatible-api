@@ -659,3 +659,211 @@ describe('视频端点', () => {
     expect(calls).toHaveLength(0)
   })
 })
+
+// ---------------------------------------------------------------------------
+// inceptionlabs-playground（真实供应商：/playground 端点、无需鉴权、stream 默认流式的怪癖）
+// ---------------------------------------------------------------------------
+
+describe('inceptionlabs-playground', () => {
+  const ilpCompletion = {
+    id: 'chatcmpl-41ea0baa-5f9c-4ad2-87b7-572c5212b9c9',
+    object: 'chat.completion',
+    created: 1792495964,
+    model: 'mercury-2',
+    choices: [
+      {
+        index: 0,
+        message: { role: 'assistant', content: 'hello', tool_calls: [], tool_call_id: null },
+        finish_reason: 'stop',
+      },
+    ],
+    usage: {
+      prompt_tokens: 6,
+      completion_tokens: 22,
+      total_tokens: 28,
+      prompt_tokens_details: { cached_tokens: 1 },
+      completion_tokens_details: { reasoning_tokens: 20 },
+    },
+    warning: null,
+    reasoning_summary: null,
+  }
+
+  it('/models 返回静态声明的 3 个 mercury 模型（上游无 /models 端点）', async () => {
+    const { app, calls } = makeApp(() => jsonRes({}))
+    const res = await app.request('/inceptionlabs-playground/v1/models')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.map((m: { id: string }) => m.id)).toEqual(['mercury-2', 'mercury-2.5', 'mercury-3'])
+    expect(calls).toHaveLength(0)
+  })
+
+  it('chat 走 /playground 端点，非流式显式 stream:false（上游省略 stream 会默认流式）', async () => {
+    const { app, calls } = makeApp(() => jsonRes(ilpCompletion))
+    const res = await app.request('/inceptionlabs-playground/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'mercury-2',
+        messages: [{ role: 'user', content: 'Say exactly: hello' }],
+        max_tokens: 64,
+        reasoning_effort: 'low',
+        temperature: 0.7,
+      }),
+    })
+    expect(res.status).toBe(200)
+    expect(calls[0].url).toBe('https://web-api-proxy.inceptionlabs.ai/v1/playground')
+    const sent = JSON.parse(String(calls[0].body))
+    expect(sent.stream).toBe(false)
+    expect(sent.reasoning_effort).toBe('low')
+    expect(sent.model).toBe('mercury-2')
+    // 出参归一化：剥掉上游的 tool_call_id / warning 等额外字段
+    const body = await res.json()
+    expect(body.choices[0].message.content).toBe('hello')
+    expect(body.choices[0].finish_reason).toBe('stop')
+    expect(body.usage.total_tokens).toBe(28)
+    expect(body.warning).toBeUndefined()
+    expect(body.choices[0].message.tool_call_id).toBeUndefined()
+  })
+
+  it('chat 流式：stream:true 透传 + [DONE] 兜底', async () => {
+    const sse = sseOf([
+      JSON.stringify({
+        id: 'chatcmpl-6162',
+        object: 'chat.completion.chunk',
+        created: 1792495976,
+        model: 'mercury-2',
+        choices: [{ index: 0, delta: { content: 'ok', role: 'assistant', tool_calls: null }, finish_reason: 'stop' }],
+        reasoning_summary: null,
+      }),
+      JSON.stringify({
+        id: 'chatcmpl-6162',
+        object: 'chat.completion.chunk',
+        created: 1792495976,
+        model: 'mercury-2',
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+      }),
+      '[DONE]',
+    ])
+    const { app, calls } = makeApp(() => sse)
+    const res = await app.request('/inceptionlabs-playground/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'mercury-3',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+        reasoning_effort: 'instant',
+      }),
+    })
+    expect(res.headers.get('content-type')).toContain('text/event-stream')
+    const text = await res.text()
+    expect(text).toContain('"content":"ok"')
+    expect(text.endsWith('data: [DONE]\n\n')).toBe(true)
+    const sent = JSON.parse(String(calls[0].body))
+    expect(sent.stream).toBe(true)
+    expect(sent.reasoning_effort).toBe('instant')
+  })
+
+  it('无需鉴权：客户端 Authorization 不转发给上游（防 key 泄露）', async () => {
+    const { app, calls } = makeApp(() => jsonRes(ilpCompletion), {
+      INCEPTIONLABS_PLAYGROUND_API_KEY_FOR_DEV: 'sk-dev-leak-check',
+    })
+    await app.request('/inceptionlabs-playground/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer sk-gateway-secret' },
+      body: JSON.stringify({ model: 'mercury-2', messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    expect(calls[0].headers.get('authorization')).toBeNull()
+    expect(calls[0].headers.get('x-api-key')).toBeNull()
+  })
+
+  it('FastAPI 嵌套 JSON 字符串错误（非法 model 400）被提取为可读 message', async () => {
+    const fastapiDetail = JSON.stringify({
+      error: {
+        message: [
+          { type: 'value_error', loc: ['body', 'model'], msg: 'Value error, Model must be one of the following: mercury, mercury-2, mercury-2.5, mercury-3' },
+        ],
+      },
+    })
+    const { app } = makeApp(() => jsonRes({ detail: fastapiDetail }, 400))
+    const res = await app.request('/inceptionlabs-playground/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'not-a-model', messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.message).toContain('Model must be one of the following')
+    expect(body.error.type).toBe('invalid_request_error')
+  })
+
+  it('FastAPI 数组校验错误（422 detail:[...]）逐项提取', async () => {
+    const { app } = makeApp(() =>
+      jsonRes({ detail: [{ type: 'missing', loc: ['body', 'messages'], msg: 'Field required' }] }, 422),
+    )
+    const res = await app.request('/inceptionlabs-playground/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'mercury-2', messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    expect(res.status).toBe(422)
+    const body = await res.json()
+    expect(body.error.message).toBe('Field required')
+    expect(body.error.type).toBe('invalid_request_error')
+  })
+
+  it('流式请求的 stream_options.include_usage 不受 unsupportedParams 丢弃影响', async () => {
+    const { app, calls } = makeApp(() => defaultChatSse())
+    const res = await app.request('/inceptionlabs-playground/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'mercury-2',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+        stream_options: { include_usage: true },
+      }),
+    })
+    expect(res.status).toBe(200)
+    const sent = JSON.parse(String(calls[0].body))
+    expect(sent.stream).toBe(true)
+    expect(sent.stream_options).toEqual({ include_usage: true })
+    // unsupportedParams 的丢弃只作用于客户端原样字段，不影响网关重新添加的字段
+    expect(sent.temperature).toBeUndefined()
+    expect(sent.user).toBeUndefined()
+  })
+
+  it('流式请求：客户端原样传入的 unsupportedParams 字段确实被丢弃', async () => {
+    const { app, calls } = makeApp(() => defaultChatSse())
+    await app.request('/inceptionlabs-playground/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'mercury-2',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+        temperature: 0.9,
+        user: 'someone',
+        tools: [],
+      }),
+    })
+    const sent = JSON.parse(String(calls[0].body))
+    expect(sent.temperature).toBeUndefined()
+    expect(sent.user).toBeUndefined()
+    expect(sent.tools).toBeUndefined()
+    expect(sent.model).toBe('mercury-2')
+  })
+
+  it('单元素数组错误不把 FastAPI type 泄漏为 OpenAI error.type', async () => {
+    const { app } = makeApp(() => jsonRes([{ type: 'missing', msg: 'Field required' }], 400))
+    const res = await app.request('/inceptionlabs-playground/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'mercury-2', messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.message).toBe('Field required')
+    expect(body.error.type).toBe('invalid_request_error')
+  })
+})

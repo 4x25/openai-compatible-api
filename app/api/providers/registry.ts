@@ -1,6 +1,7 @@
 import type { Provider } from './types'
 import type { ModelInfo } from '../types'
 import { saltyfish } from './saltyfish'
+import { inceptionlabsPlayground } from './inceptionlabs-playground'
 
 /** 已注册供应商（按 id 小写索引） */
 const registry = new Map<string, Provider>()
@@ -10,6 +11,7 @@ function register(provider: Provider): void {
 }
 
 register(saltyfish)
+register(inceptionlabsPlayground)
 
 /** 注册供应商（插件入口）：新增供应商 = 新建 provider 文件 + 调用本函数 */
 export function registerProvider(provider: Provider): void {

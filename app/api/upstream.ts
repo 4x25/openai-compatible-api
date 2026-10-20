@@ -61,6 +61,9 @@ export function resolveAuth(
   clientApiKey: string | null,
   env: ProviderEnv,
 ): { credential: string | null } {
+  // 'none'：上游无需鉴权，不转发任何客户端凭证，也不使用 dev key
+  if (provider.auth === 'none') return { credential: null }
+
   const auth: ProviderAuth = provider.auth ?? {}
   const headerName = (auth.header ?? 'authorization').toLowerCase()
   const scheme = auth.scheme !== undefined ? auth.scheme : 'Bearer'
@@ -103,10 +106,11 @@ export function buildUpstreamHeaders(
   const headers = new Headers()
   const { credential } = resolveAuth(headers, provider, clientAuth, clientApiKey, env)
 
+  const authConf = provider.auth === 'none' ? undefined : provider.auth
   for (const [key, value] of Object.entries(provider.headers ?? {})) {
     headers.set(key, value)
   }
-  for (const [key, value] of Object.entries(provider.auth?.extraHeaders ?? {})) {
+  for (const [key, value] of Object.entries(authConf?.extraHeaders ?? {})) {
     headers.set(key, value)
   }
   headers.set('accept', accept === 'events' ? 'text/event-stream' : 'application/json')

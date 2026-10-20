@@ -148,18 +148,31 @@ export function mapUpstreamStatus(status: number): number {
   return 502
 }
 
-function extractErrorFromJson(
-  parsed: unknown,
-): { message: string; type?: string; code?: string | number | null; param?: string | null } | null {
+interface ExtractedError {
+  message: string
+  type?: string
+  code?: string | number | null
+  param?: string | null
+}
+
+function extractErrorFromJson(parsed: unknown, depth = 0): ExtractedError | null {
   if (typeof parsed === 'string') {
-    return parsed ? { message: parsed } : null
+    const message = messageFrom(parsed, depth)
+    return message ? { message } : null
   }
   if (Array.isArray(parsed)) {
-    for (const item of parsed) {
-      const found = extractErrorFromJson(item)
-      if (found) return found
+    // FastAPI 校验错误列表（{"detail":[{...}]}）：逐项提取后合并。
+    // 注意：不透传数组项的 type（FastAPI 的 "missing"/"value_error" 不是 OpenAI 错误类型）
+    const parts = parsed.map((item) => extractErrorFromJson(item, depth)).filter((p): p is ExtractedError => p !== null)
+    if (parts.length === 0) return null
+    if (parts.length === 1) {
+      return { ...parts[0], type: undefined }
     }
-    return null
+    return {
+      message: parts.map((p) => p.message).join('; '),
+      code: parts.find((p) => p.code != null)?.code ?? null,
+      param: parts.find((p) => p.param != null)?.param ?? null,
+    }
   }
   if (typeof parsed !== 'object' || parsed === null) return null
 
@@ -168,10 +181,13 @@ function extractErrorFromJson(
   // {"error": ...}
   if ('error' in obj) {
     const err = obj.error
-    if (typeof err === 'string') return { message: err }
-    if (typeof err === 'object' && err !== null) {
+    if (typeof err === 'string' || Array.isArray(err)) {
+      const found = extractErrorFromJson(err, depth)
+      if (found) return found
+    } else if (typeof err === 'object' && err !== null) {
       const e = err as Record<string, unknown>
-      const message = firstString(e.message, e.msg, e.detail, e.reason)
+      // detail（FastAPI 通用字段）刻意放在最后：优先采用明确的错误字段
+      const message = messageFrom(e.message, depth) ?? firstString(e.msg, e.reason) ?? messageFrom(e.detail, depth)
       if (message) {
         return {
           message,
@@ -183,7 +199,11 @@ function extractErrorFromJson(
     }
   }
 
-  const message = firstString(obj.message, obj.msg, obj.detail, obj.error_message, obj.errorMessage)
+  // detail（FastAPI 通用字段）刻意放在最后：优先采用明确的错误字段
+  const message =
+    messageFrom(obj.message, depth) ??
+    firstString(obj.msg, obj.error_message, obj.errorMessage) ??
+    messageFrom(obj.detail, depth)
   if (message) {
     return {
       message,
@@ -192,6 +212,32 @@ function extractErrorFromJson(
     }
   }
   return null
+}
+
+/**
+ * 从错误字段值中提取可读 message：
+ * - 字符串：若是 JSON（FastAPI 的 {"detail":"{\"error\":...}"} 套娃），解析后递归提取
+ * - 数组：逐项提取后合并
+ */
+function messageFrom(value: unknown, depth = 0): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (trimmed === '') return undefined
+    if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && depth < 8) {
+      try {
+        const found = extractErrorFromJson(JSON.parse(trimmed), depth + 1)
+        if (found) return found.message
+      } catch {
+        // 不是合法 JSON，按原文处理
+      }
+    }
+    return trimmed
+  }
+  if (Array.isArray(value)) {
+    const found = extractErrorFromJson(value, depth)
+    return found?.message
+  }
+  return undefined
 }
 
 function firstString(...values: unknown[]): string | undefined {

@@ -115,8 +115,12 @@ export interface Provider {
   versionPath?: string
   /** 模型列表：静态数组或从上游拉取 */
   models: ModelInfo[] | ((ctx: ProviderCallContext) => Promise<ModelInfo[]>)
-  /** 认证转换配置；缺省为标准 Authorization: Bearer 透传 */
-  auth?: ProviderAuth
+  /**
+   * 认证转换配置；缺省为标准 Authorization: Bearer 透传。
+   * 'none' 表示上游无需鉴权：网关剥离客户端凭证，也不读取 dev key，
+   * 避免把使用方发给本网关的 key 转发给第三方上游。
+   */
+  auth?: ProviderAuth | 'none'
   /** 附加到所有上游请求的头 */
   headers?: Record<string, string>
   chat?: ChatAdapter
