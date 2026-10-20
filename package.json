@@ -4,7 +4,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build --mode client && vite build",
-    "start": "cd dist && node index.js"
+    "start": "cd dist && node --env-file-if-exists=../.env index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "private": true,
   "dependencies": {
@@ -23,6 +26,7 @@
     "@types/node": "^26.6.5",
     "daisyui": "^5.7.50",
     "tailwindcss": "^4.3.2",
-    "vite": "^8.1.4"
+    "vite": "^8.1.4",
+    "vitest": "^5.0.5"
   }
 }
