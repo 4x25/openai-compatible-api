@@ -94,6 +94,7 @@ export async function handleChat(req: ApiRequestContext): Promise<Response> {
       // 上游流式 + 客户端流式：逐 chunk 归一化透传
       const stream = transformUpstreamSse(res, {
         ...chunkMeta,
+        includeUsage,
         transformChunk: adapter.transformStreamChunk
           ? (chunk) => adapter.transformStreamChunk!(chunk, upstream)
           : undefined,

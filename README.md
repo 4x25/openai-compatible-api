@@ -72,6 +72,7 @@ curl https://example.com/saltyfish/https://ai.saltyfish.live/v1/chat/completions
 - **杂牌响应兜底**：上游 200 返回纯文本时包装为 `assistant` content；图片接口返回二进制时自动转 `b64_json`
 - **CORS**：任意 origin 放行
 - 每个响应携带 `x-request-id`
+- 流式统计由 `stream_options.include_usage` 控制：请求时在结束 chunk 之后输出一个 `choices: []` 的 usage chunk，再输出 `[DONE]`；上游未提供统计时不合成数值。上游错误的 `Retry-After` 会保留。
 
 ## 认证模型
 
@@ -123,8 +124,22 @@ app/
 | --- | --- | --- | --- |
 | `saltyfish` | `/chat/completions`（流式+非流式） | `claude-fable-5-1` / `claude-opus-5-5` / `gpt-6-astra` | 客户端凭证透传 |
 | `inceptionlabs-playground` | `/playground`（流式+非流式） | `mercury-2` / `mercury-2.5` / `mercury-3` | 无需鉴权（`auth: 'none'`，不转发客户端凭证） |
+| `ifm` | `/chat/completions`（流式+非流式） | `IFM/K2-Horizon-375B-A23B` / `IFM/Jais-3-MoVA-36B-A4B` | 客户端凭证透传 |
 
 `inceptionlabs-playground` 的已知怪癖（详见 `app/api/providers/inceptionlabs-playground.ts` 注释）：上游省略 `stream` 字段时默认流式返回，网关对非流式请求显式补 `stream:false`；`reasoning_effort` 取值 `instant`/`low`/`medium`/`high`；其余 OpenAI 参数（`temperature`、`tools` 等）上游静默忽略。
+
+### IFM
+
+baseUrl 使用 `https://example.com/ifm/v1`，默认上游为 `https://api.ifm.ai/v1`；可通过 `IFM_BASE_URL` 或显式 baseUrl 覆盖。开发兜底凭证使用 `IFM_API_KEY_FOR_DEV`。
+
+- `developer` 消息按原顺序映射为 `system`，纯文本 content 数组按顺序拼接为字符串；非文本内容返回带具体 `param` 的参数错误。
+- 每条 assistant 历史消息向上游同时发送 `reasoning_content` 与 `reasoning`，优先采用字符串 `reasoning_content`（包括空字符串），其次采用 `reasoning`，缺失时补 `""`。工具调用消息的空 content 转为 `""`。
+- 响应和流式 delta 的推理别名统一为项目的 `reasoning_content` 兼容扩展；它不是 OpenAI 官方字段。客户端回传该字段可保留推理上下文；补空只解决上游校验，不能恢复已丢失的推理。
+- 标准 `tools` / `tool_choice`、顶层 `reasoning_effort`、`max_completion_tokens`、`logprobs`、`response_format` 沿用参数白名单；`n` 为 1，其他数值返回参数错误。
+- 已知上游缺陷：K2 的低推理强度多轮请求可能将思考文本和答案混在 `content` 或推理字段中。首版保留上游文本与用户推理强度，协议转换不修复该内容分流问题。
+- 结构化输出实测可用，但也观察到过 HTTP 200 的 content 未通过 JSON 解析；调用方仍应校验 JSON 与 schema，将格式失败作为上游异常处理。
+
+参考：[IFM Chat API](https://docs.ifm.ai/docs/chat-completions.md)、[多轮历史](https://docs.ifm.ai/docs/multi-turn.md)、[流式约定](https://docs.ifm.ai/docs/streaming.md)。
 
 ## 新增供应商
 

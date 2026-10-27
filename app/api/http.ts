@@ -17,7 +17,7 @@ export function errorResponse(
 }
 
 export function gatewayErrorResponse(e: GatewayError, headers: Record<string, string> = {}): Response {
-  return jsonResponse(gatewayErrorBody(e), e.status, headers)
+  return jsonResponse(gatewayErrorBody(e), e.status, { ...e.headers, ...headers })
 }
 
 export function internalErrorResponse(message = 'The gateway encountered an internal error.'): Response {

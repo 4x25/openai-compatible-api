@@ -6,6 +6,7 @@ export class GatewayError extends Error {
   readonly type: string
   readonly code: string | number | null
   readonly param: string | null
+  readonly headers: Readonly<Record<string, string>>
 
   constructor(
     message: string,
@@ -14,6 +15,7 @@ export class GatewayError extends Error {
       type?: string
       code?: string | number | null
       param?: string | null
+      headers?: Record<string, string>
     } = {},
   ) {
     super(message)
@@ -22,6 +24,7 @@ export class GatewayError extends Error {
     this.type = opts.type ?? 'api_error'
     this.code = opts.code ?? null
     this.param = opts.param ?? null
+    this.headers = { ...opts.headers }
   }
 }
 

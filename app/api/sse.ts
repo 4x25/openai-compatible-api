@@ -141,6 +141,7 @@ interface ChoiceAccumulator {
   role: string
   content: string | null
   reasoning: string
+  hasReasoning: boolean
   toolCalls: Map<number, { id: string; type: string; name: string; arguments: string }>
   finishReason: string | null
   logprobs: unknown
@@ -175,6 +176,7 @@ export function aggregateChunks(
           role: 'assistant',
           content: null,
           reasoning: '',
+          hasReasoning: false,
           toolCalls: new Map(),
           finishReason: null,
           logprobs: undefined,
@@ -190,6 +192,7 @@ export function aggregateChunks(
       }
       if (typeof delta.reasoning_content === 'string') {
         acc.reasoning += delta.reasoning_content
+        acc.hasReasoning = true
       }
       if (Array.isArray(delta.tool_calls)) {
         mergeToolCalls(acc, delta.tool_calls)
@@ -209,7 +212,7 @@ export function aggregateChunks(
       role: acc.role as 'assistant',
       content: acc.content,
     }
-    if (acc.reasoning) message.reasoning_content = acc.reasoning
+    if (acc.hasReasoning) message.reasoning_content = acc.reasoning
     if (acc.toolCalls.size > 0) {
       message.tool_calls = [...acc.toolCalls.entries()]
         .sort(([a], [b]) => a - b)
@@ -282,7 +285,7 @@ export function* streamFromCompletion(
       finish_reason: c.finish_reason ?? null,
       logprobs: undefined,
     })),
-    usage: chunkUsage ?? null,
+    ...(opts.includeUsage ? { usage: chunkUsage ?? null } : {}),
   })
 
   for (const choice of choices) {
@@ -294,7 +297,7 @@ export function* streamFromCompletion(
 
     // reasoning chunk
     const reasoning = message.reasoning_content
-    if (typeof reasoning === 'string' && reasoning) {
+    if (typeof reasoning === 'string') {
       yield sseData(makeChunk([{ index, delta: { reasoning_content: reasoning } }]))
     }
 
@@ -333,6 +336,7 @@ export interface StreamTransformOptions {
   requestModel: string
   id: string
   created: number
+  includeUsage?: boolean
   transformChunk?: (chunk: Record<string, unknown>) => Promise<unknown> | unknown
   signal?: AbortSignal
 }
@@ -340,6 +344,10 @@ export interface StreamTransformOptions {
 export function transformUpstreamSse(res: Response, options: StreamTransformOptions): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     async start(controller) {
+      let usageChunk: ChatCompletionChunk | undefined
+      let completed = false
+      const activeChoices = new Set<number>()
+      const finishedChoices = new Set<number>()
       try {
         for await (const raw of parseSseJson(res)) {
           if (options.signal?.aborted) break
@@ -352,12 +360,25 @@ export function transformUpstreamSse(res: Response, options: StreamTransformOpti
             options.id,
             options.created,
           )
-          controller.enqueue(sseData(chunk))
+          for (const choice of chunk.choices) {
+            activeChoices.add(choice.index)
+            if (choice.finish_reason !== null) finishedChoices.add(choice.index)
+          }
+          // 后端可能把统计放在内容/结束 chunk，或单独放在 choices:[] 中。
+          if (chunk.usage) usageChunk = { ...chunk, choices: [] }
+          delete chunk.usage
+          if (options.includeUsage) chunk.usage = null
+          if (chunk.choices.length > 0) controller.enqueue(sseData(chunk))
         }
+        completed = !options.signal?.aborted && activeChoices.size > 0
+          && [...activeChoices].every((index) => finishedChoices.has(index))
       } catch {
         // 上游中断：静默结束并补 [DONE]，保证客户端不挂死
       }
       try {
+        if (completed && options.includeUsage && usageChunk) {
+          controller.enqueue(sseData(usageChunk))
+        }
         controller.enqueue(sseDone())
         controller.close()
       } catch {
@@ -389,7 +410,7 @@ export function normalizeCompletion(body: unknown, requestModel: string): ChatCo
         role: asString(message.role, 'assistant') as 'assistant',
         content: typeof message.content === 'string' ? message.content : message.content === null ? null : '',
       }
-      if (typeof message.reasoning_content === 'string' && message.reasoning_content) {
+      if (typeof message.reasoning_content === 'string') {
         normalizedMessage.reasoning_content = message.reasoning_content
       }
       if (Array.isArray(message.tool_calls)) {

@@ -201,11 +201,14 @@ export async function callUpstream(options: UpstreamCallOptions): Promise<Respon
 
   if (!res.ok) {
     const errorBody = await readUpstreamError(res, errorContext)
+    // 仅放行重试提示，避免把上游 cookie、认证或内部账户信息暴露给客户端。
+    const retryAfter = res.headers.get('retry-after')
     throw new GatewayError(errorBody.error.message, {
       status: mapUpstreamStatus(res.status),
       type: errorBody.error.type,
       code: errorBody.error.code,
       param: errorBody.error.param,
+      headers: retryAfter ? { 'retry-after': retryAfter } : undefined,
     })
   }
 

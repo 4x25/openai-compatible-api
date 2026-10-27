@@ -44,8 +44,11 @@ export interface ChatMessageToolCall {
 
 export interface ChatRequestMessage {
   role: 'system' | 'user' | 'assistant' | 'tool' | (string & {})
-  content: string | Array<Record<string, unknown>> | null
+  content?: string | Array<Record<string, unknown>> | null
   name?: string
+  /** 兼容扩展：assistant 历史中的推理文本及旧别名。 */
+  reasoning_content?: string | null
+  reasoning?: string | null
   tool_calls?: ChatMessageToolCall[]
   tool_call_id?: string
 }
