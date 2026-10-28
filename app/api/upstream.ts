@@ -1,5 +1,6 @@
 import { GatewayError, errors, mapUpstreamStatus, normalizeUpstreamError } from './errors'
 import type { OpenAiErrorResponse } from './types'
+import { readBytes } from './http'
 import type { Provider, ProviderAuth, ProviderCallContext, UpstreamRequest } from './providers/types'
 
 // ---------------------------------------------------------------------------
@@ -131,10 +132,13 @@ export interface UpstreamCallOptions {
   errorContext: string
 }
 
-function joinUrl(baseUrl: string, path: string): string {
-  const u = new URL(baseUrl)
+export function upstreamUrl(baseUrl: string, request: Pick<UpstreamRequest, 'path' | 'baseUrl' | 'query'>): string {
+  const path = new URL(request.path.replace(/^\/+/, ''), 'https://path.invalid/')
+  const u = new URL(request.baseUrl ?? baseUrl)
   const cleanPath = u.pathname.replace(/\/+$/, '')
-  u.pathname = cleanPath + (path.startsWith('/') ? path : `/${path}`)
+  u.pathname = cleanPath + path.pathname
+  for (const [key, value] of path.searchParams) u.searchParams.set(key, value)
+  for (const [key, value] of Object.entries(request.query ?? {})) u.searchParams.set(key, value)
   return u.toString()
 }
 
@@ -150,7 +154,7 @@ async function readUpstreamError(res: Response, errorContext: string): Promise<O
  */
 export async function callUpstream(options: UpstreamCallOptions): Promise<Response> {
   const { ctx, request, timeoutMs, errorContext } = options
-  const url = joinUrl(ctx.baseUrl, request.path)
+  const url = upstreamUrl(ctx.baseUrl, request)
   const method = request.method ?? 'POST'
 
   const headers = new Headers(request.headers ?? undefined)
@@ -160,44 +164,11 @@ export async function callUpstream(options: UpstreamCallOptions): Promise<Respon
     headers.set('content-type', 'application/json')
     body = JSON.stringify(request.json)
   } else if (request.formData !== undefined) {
+    headers.delete('content-type')
     body = request.formData
   }
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => {
-    controller.abort(new GatewayError(`Upstream timeout after ${timeoutMs}ms`, {
-      status: 504,
-      type: 'api_error',
-      code: 'upstream_timeout',
-    }))
-  }, timeoutMs)
-
-  const onClientAbort = () => {
-    if (ctx.signal.aborted) controller.abort(ctx.signal.reason)
-  }
-  ctx.signal.addEventListener('abort', onClientAbort, { once: true })
-
-  let res: Response
-  try {
-    res = await ctx.fetch(url, {
-      method,
-      headers,
-      body,
-      signal: controller.signal,
-    })
-  } catch (e) {
-    if (controller.signal.aborted && controller.signal.reason instanceof GatewayError) {
-      throw controller.signal.reason
-    }
-    if (ctx.signal.aborted) {
-      // 客户端主动断开，直接结束
-      throw new GatewayError('Client aborted the request.', { status: 499 })
-    }
-    throw errors.upstreamError(`Upstream ${errorContext} failed: ${String((e as Error)?.message ?? e)}`)
-  } finally {
-    clearTimeout(timer)
-    ctx.signal.removeEventListener('abort', onClientAbort)
-  }
+  const res = await fetchWithTimeout(ctx, url, { method, headers, body, redirect: 'error' }, timeoutMs, errorContext)
 
   if (!res.ok) {
     const errorBody = await readUpstreamError(res, errorContext)
@@ -212,8 +183,100 @@ export async function callUpstream(options: UpstreamCallOptions): Promise<Respon
     })
   }
 
-  // 2xx 但没有内容类型 —— 可能为空响应；交由调用方判断
   return res
+}
+
+/** 媒体下载使用全新的头集合，绝不转发供应商凭证。 */
+export async function callMedia(
+  ctx: ProviderCallContext,
+  url: string,
+  range: string | undefined,
+  timeoutMs: number,
+): Promise<Response> {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw errors.upstreamError('Upstream returned an invalid media URL.')
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+    throw errors.upstreamError('Upstream returned an invalid media URL.')
+  }
+  const headers = new Headers({ accept: 'video/*,application/octet-stream', 'accept-encoding': 'identity' })
+  if (range) headers.set('range', range)
+  return fetchWithTimeout(ctx, parsed.toString(), { headers, redirect: 'follow' }, timeoutMs, 'video content')
+}
+
+async function fetchWithTimeout(
+  ctx: ProviderCallContext,
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  errorContext: string,
+): Promise<Response> {
+  if (ctx.signal.aborted) throw new GatewayError('Client aborted the request.', { status: 499 })
+  const controller = new AbortController()
+  const timer = setTimeout(() => {
+    controller.abort(new GatewayError(`Upstream timeout after ${timeoutMs}ms`, {
+      status: 504,
+      type: 'api_error',
+      code: 'upstream_timeout',
+    }))
+  }, timeoutMs)
+
+  const onClientAbort = () => controller.abort(ctx.signal.reason)
+  ctx.signal.addEventListener('abort', onClientAbort, { once: true })
+  const release = () => ctx.signal.removeEventListener('abort', onClientAbort)
+
+  try {
+    const res = await ctx.fetch(url, {
+      ...init,
+      signal: controller.signal,
+    })
+    if (!res.body) {
+      release()
+      return res
+    }
+    // Headers 返回后仍保持取消关联，读完或取消 body 时再释放监听。
+    const reader = res.body.getReader()
+    return new Response(new ReadableStream<Uint8Array>({
+      async pull(target) {
+        try {
+          const { done, value } = await reader.read()
+          if (done) {
+            release()
+            reader.releaseLock()
+            target.close()
+          } else target.enqueue(value)
+        } catch (error) {
+          release()
+          reader.releaseLock()
+          target.error(error)
+        }
+      },
+      async cancel(reason) {
+        release()
+        controller.abort(reason)
+        try {
+          await reader.cancel(reason)
+        } finally {
+          reader.releaseLock()
+        }
+      },
+    }), { status: res.status, statusText: res.statusText, headers: res.headers })
+  } catch (e) {
+    release()
+    if (controller.signal.aborted && controller.signal.reason instanceof GatewayError) {
+      throw controller.signal.reason
+    }
+    if (ctx.signal.aborted) {
+      // 客户端主动断开，直接结束
+      throw new GatewayError('Client aborted the request.', { status: 499 })
+    }
+    throw errors.upstreamError(`Upstream ${errorContext} failed: ${String((e as Error)?.message ?? e)}`)
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +288,22 @@ export async function parseJsonBody(res: Response): Promise<unknown | null> {
     return await res.json()
   } catch {
     return null
+  }
+}
+
+/** 上游正文断连属于 502，客户端取消仍保留 499，限额错误原样保留。 */
+export async function readUpstreamBytes(
+  ctx: ProviderCallContext,
+  res: Response,
+  maxBytes: number,
+  tooLarge: () => Error,
+): Promise<Uint8Array<ArrayBuffer>> {
+  try {
+    return await readBytes(res.body, maxBytes, tooLarge)
+  } catch (error) {
+    if (ctx.signal.aborted) throw new GatewayError('Client aborted the request.', { status: 499 })
+    if (error instanceof GatewayError) throw error
+    throw errors.upstreamError('Upstream response body could not be read.')
   }
 }
 

@@ -104,7 +104,7 @@ export async function handleChat(req: ApiRequestContext): Promise<Response> {
     }
     // 上游流式 + 客户端非流式：聚合为一个完整响应
     const chunks: Record<string, unknown>[] = []
-    for await (const raw of parseSseJson(res)) {
+    for await (const raw of parseSseJson(res, c.req.raw.signal)) {
       const transformed = adapter.transformStreamChunk
         ? await adapter.transformStreamChunk(raw, upstream)
         : raw

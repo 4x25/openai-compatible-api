@@ -9,7 +9,7 @@ import { buildUpstreamHeaders, DEFAULT_TIMEOUT_MS, providerEnv } from './upstrea
 import { handleModels } from './handlers/models'
 import { handleChat } from './handlers/chat'
 import { handleImages } from './handlers/images'
-import { handleVideoCreate, handleVideoTask } from './handlers/video'
+import { handleVideoContent, handleVideoCreate, handleVideoTask } from './handlers/video'
 import type { ApiRequestContext } from './handlers/types'
 
 export interface GatewayOptions {
@@ -108,10 +108,12 @@ async function dispatch(
       return handleImages(req, 'generations')
     case 'images.edits':
       return handleImages(req, 'edits')
-    case 'video.generations':
+    case 'videos.create':
       return handleVideoCreate(req)
-    case 'video.generations.task':
+    case 'videos.retrieve':
       return handleVideoTask(req)
+    case 'videos.content':
+      return handleVideoContent(req)
   }
 }
 

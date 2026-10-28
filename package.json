@@ -20,11 +20,13 @@
     "honox": "0.1.61"
   },
   "devDependencies": {
+    "@hono/cli": "^1.0.0-rc.8",
     "@hono/vite-build": "^1.11.1",
     "@hono/vite-dev-server": "^0.26.1",
     "@tailwindcss/vite": "^4.3.2",
     "@types/node": "^26.6.5",
     "daisyui": "^5.7.50",
+    "openai": "^7.45.1",
     "tailwindcss": "^4.3.2",
     "vite": "^8.1.4",
     "vitest": "^5.0.5"

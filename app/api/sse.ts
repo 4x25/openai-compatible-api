@@ -23,11 +23,14 @@ export function sseDone(): Uint8Array {
 // ---------------------------------------------------------------------------
 
 /** 从 SSE 流中逐个产出解析后的 JSON chunk（自动跳过 [DONE] 与非 JSON 行） */
-export async function* parseSseJson(res: Response): AsyncGenerator<Record<string, unknown>> {
+export async function* parseSseJson(res: Response, signal?: AbortSignal): AsyncGenerator<Record<string, unknown>> {
   if (!res.body) return
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let ended = false
+  const cancel = () => { void reader.cancel(signal?.reason).catch(() => {}) }
+  signal?.addEventListener('abort', cancel, { once: true })
 
   const emitBlock = (block: string): Record<string, unknown> | null => {
     const lines = block.split(/\r?\n/)
@@ -54,8 +57,12 @@ export async function* parseSseJson(res: Response): AsyncGenerator<Record<string
 
   try {
     while (true) {
+      if (signal?.aborted) return
       const { done, value } = await reader.read()
-      if (done) break
+      if (done) {
+        ended = true
+        break
+      }
       buffer += decoder.decode(value, { stream: true })
       let match: RegExpMatchArray | null
       // eslint-disable-next-line no-cond-assign
@@ -71,6 +78,8 @@ export async function* parseSseJson(res: Response): AsyncGenerator<Record<string
     const tail = emitBlock(buffer)
     if (tail !== null && tail.__done !== true) yield tail
   } finally {
+    signal?.removeEventListener('abort', cancel)
+    if (!ended) await reader.cancel().catch(() => {})
     reader.releaseLock()
   }
 }
@@ -342,6 +351,8 @@ export interface StreamTransformOptions {
 }
 
 export function transformUpstreamSse(res: Response, options: StreamTransformOptions): ReadableStream<Uint8Array> {
+  const cancellation = new AbortController()
+  const signal = options.signal ? AbortSignal.any([options.signal, cancellation.signal]) : cancellation.signal
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       let usageChunk: ChatCompletionChunk | undefined
@@ -349,8 +360,8 @@ export function transformUpstreamSse(res: Response, options: StreamTransformOpti
       const activeChoices = new Set<number>()
       const finishedChoices = new Set<number>()
       try {
-        for await (const raw of parseSseJson(res)) {
-          if (options.signal?.aborted) break
+        for await (const raw of parseSseJson(res, signal)) {
+          if (signal.aborted) break
           const transformed = options.transformChunk ? await options.transformChunk(raw) : raw
           if (transformed === null || transformed === undefined) continue
           if (typeof transformed !== 'object') continue
@@ -370,7 +381,7 @@ export function transformUpstreamSse(res: Response, options: StreamTransformOpti
           if (options.includeUsage) chunk.usage = null
           if (chunk.choices.length > 0) controller.enqueue(sseData(chunk))
         }
-        completed = !options.signal?.aborted && activeChoices.size > 0
+        completed = !signal.aborted && activeChoices.size > 0
           && [...activeChoices].every((index) => finishedChoices.has(index))
       } catch {
         // 上游中断：静默结束并补 [DONE]，保证客户端不挂死
@@ -385,8 +396,8 @@ export function transformUpstreamSse(res: Response, options: StreamTransformOpti
         // controller 已关闭
       }
     },
-    cancel() {
-      res.body?.cancel().catch(() => {})
+    cancel(reason) {
+      cancellation.abort(reason)
     },
   })
 }

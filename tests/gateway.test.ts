@@ -21,8 +21,9 @@ function makeProvider(overrides: Partial<Provider> & { id: string }): Provider {
       edits: { path: '/images/edits' },
     },
     video: {
-      create: { path: '/video/generations' },
-      get: { path: '/video/generations/{task_id}' },
+      create: { path: '/videos' },
+      get: { path: '/videos/{video_id}' },
+      content: {},
     },
     ...overrides,
   }
@@ -609,9 +610,9 @@ describe('图片端点', () => {
 // ---------------------------------------------------------------------------
 
 describe('视频端点', () => {
-  it('POST /video/generations 创建任务并归一化状态', async () => {
+  it('POST /videos 创建任务并归一化状态', async () => {
     const { app, calls } = makeApp(() => jsonRes({ id: 'task_1', status: 'processing' }))
-    const res = await app.request('/mock/v1/video/generations', {
+    const res = await app.request('/mock/v1/videos', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'mock-a', prompt: 'a sunset', foo: 'x' }),
@@ -619,26 +620,26 @@ describe('视频端点', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.id).toBe('task_1')
-    expect(body.object).toBe('video.generation')
+    expect(body.object).toBe('video')
     expect(body.status).toBe('in_progress')
     const sent = JSON.parse(String(calls[0].body))
     expect(sent.foo).toBeUndefined()
   })
 
-  it('GET /video/generations/{task_id} 查询任务，路径占位符替换', async () => {
+  it('GET /videos/{video_id} 查询任务，路径占位符替换', async () => {
     const { app, calls } = makeApp(() => jsonRes({ id: 'task_1', status: 'succeeded', url: 'https://v.example/1.mp4' }))
-    const res = await app.request('/mock/v1/video/generations/task_1')
+    const res = await app.request('/mock/v1/videos/task_1')
     expect(res.status).toBe(200)
     expect(calls[0].method).toBe('GET')
-    expect(calls[0].url).toBe('https://mock.test/v1/video/generations/task_1')
+    expect(calls[0].url).toBe('https://mock.test/v1/videos/task_1')
     const body = await res.json()
-    expect(body.status).toBe('succeeded')
-    expect(body.video.url).toBe('https://v.example/1.mp4')
+    expect(body.status).toBe('completed')
+    expect(body.url).toBe('https://v.example/1.mp4')
   })
 
   it('供应商无视频能力时返回 unsupported_endpoint', async () => {
     const { app, calls } = makeApp(() => jsonRes({}))
-    const res = await app.request('/mocktext/v1/video/generations', {
+    const res = await app.request('/mocktext/v1/videos', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'mock-a', prompt: 'x' }),

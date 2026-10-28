@@ -120,7 +120,7 @@ describe('IFM 注册与认证', () => {
     expect(calls[0].headers.get('x-api-key')).toBeNull()
   })
 
-  it.each(['/ifm/v1/images/generations', '/ifm/v1/video/generations'])('能力未声明时返回 unsupported_endpoint：%s', async (path) => {
+  it.each(['/ifm/v1/images/generations', '/ifm/v1/videos'])('能力未声明时返回 unsupported_endpoint：%s', async (path) => {
     const { app, calls } = makeApp()
     const res = await app.request(path, chatReq())
     expect((await res.json()).error.code).toBe('unsupported_endpoint')

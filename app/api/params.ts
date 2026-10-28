@@ -45,10 +45,9 @@ const IMAGE_ALLOWED = new Set([
 const VIDEO_ALLOWED = new Set([
   'model',
   'prompt',
-  'image',
+  'input_reference',
   'size',
-  'duration',
-  'n',
+  'seconds',
 ])
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

@@ -18,36 +18,37 @@ export type EndpointKind =
   | 'chat.completions'
   | 'images.generations'
   | 'images.edits'
-  | 'video.generations'
-  | 'video.generations.task'
+  | 'videos.create'
+  | 'videos.retrieve'
+  | 'videos.content'
 
 export interface GatewayRouteMatch {
   providerId: string
   kind: EndpointKind
   /** 端点之前的原始前缀（以 / 开头；自定义 baseUrl 形如 "/https://x/v1"） */
   prefix: string
-  /** video.generations.task 专用 */
-  taskId: string
+  /** 视频查询与下载专用。 */
+  videoId: string
 }
 
 interface EndpointPattern {
   kind: EndpointKind
   methods: string[]
   regex: RegExp
-  taskGroup?: boolean
+  videoGroup?: boolean
 }
 
 const ENDPOINTS: EndpointPattern[] = [
   {
-    kind: 'video.generations.task',
+    kind: 'videos.content',
     methods: ['GET'],
-    regex: /\/video\/generations\/([^/]+)$/,
-    taskGroup: true,
+    regex: /\/videos\/([^/]+)\/content$/,
+    videoGroup: true,
   },
   {
-    kind: 'video.generations',
+    kind: 'videos.create',
     methods: ['POST'],
-    regex: /\/video\/generations$/,
+    regex: /\/videos$/,
   },
   {
     kind: 'chat.completions',
@@ -69,6 +70,12 @@ const ENDPOINTS: EndpointPattern[] = [
     methods: ['GET'],
     regex: /\/models$/,
   },
+  {
+    kind: 'videos.retrieve',
+    methods: ['GET'],
+    regex: /\/videos\/([^/]+)$/,
+    videoGroup: true,
+  },
 ]
 
 /** 判断 URL 是否是本网关的 API 路径（用于中间件中与 HonoX 页面路由分流） */
@@ -82,10 +89,15 @@ export function matchApiRoute(url: string): GatewayRouteMatch | null {
   } catch {
     return null
   }
-  // 先按纯路径匹配（常规请求，查询串被忽略）
+  // 原样嵌入的上游 URL 可能把端点放在其查询串后；不能被上游路径自身的 /videos 抢先匹配。
+  if (search && /^\/[^/]+\/https?:\/\//i.test(path)) {
+    const byQuery = tryMatch(path + search)
+    if (byQuery?.prefix.includes('?') && parseUpstreamUrl(decodeSafe(byQuery.prefix.slice(1)))) return byQuery
+  }
+  // 常规请求的客户端查询串不参与后缀解析；编码的自定义 URL 同样保持此行为。
   const byPath = tryMatch(path)
   if (byPath) return byPath
-  // 再按 路径+查询串 匹配：支持自定义 baseUrl 本身携带查询参数的少见场景
+  // 兜底兼容自定义 baseUrl 自身带查询参数的形式。
   // （如 /<provider>/https://x/api?api-version=1/chat/completions）
   if (search) return tryMatch(path + search)
   return null
@@ -98,6 +110,9 @@ function tryMatch(trimmed: string): GatewayRouteMatch | null {
   const providerId = segments[1]
   if (!providerId) return null
 
+  let fallback: GatewayRouteMatch | null = null
+  let best: GatewayRouteMatch | null = null
+  let bestScore = 0
   for (const endpoint of ENDPOINTS) {
     const match = endpoint.regex.exec(path)
     if (!match) continue
@@ -108,12 +123,20 @@ function tryMatch(trimmed: string): GatewayRouteMatch | null {
       providerId,
       kind: endpoint.kind,
       prefix,
-      taskId: '',
+      videoId: '',
     }
-    if (endpoint.taskGroup) result.taskId = decodeSafe(match[1])
-    return result
+    if (endpoint.videoGroup) result.videoId = decodeSafe(match[1])
+    fallback ??= result
+    // 固定后缀在合法自定义 URL 下优先；默认前缀优先于未验证的单段版本标记。
+    // 防止 /videos/models 和 /v1/videos/models 被误当作模型列表。
+    const score = prefix === '' || prefix === '/v1' || parseUpstreamUrl(decodeSafe(prefix.slice(1))) ? 3
+      : /^\/[^/]+$/.test(prefix) ? 2 : 0
+    if (score > bestScore) {
+      best = result
+      bestScore = score
+    }
   }
-  return null
+  return best ?? fallback
 }
 
 export function endpointMethods(kind: EndpointKind): string[] {

@@ -176,26 +176,31 @@ export interface ImagesResponse {
 // Video
 // ---------------------------------------------------------------------------
 
-export interface VideoGenerationRequest {
+export interface VideoCreateRequest {
   model: string
-  prompt?: string
-  image?: string
+  prompt: string
+  input_reference?: string | { image_url?: string; file_id?: string }
   size?: string
-  duration?: number | string
-  n?: number
+  seconds?: number | string
   [k: string]: unknown
 }
 
-export interface VideoGenerationResponse {
+export interface VideoResponse {
   id: string
-  object: 'video.generation'
-  created: number
+  object: 'video'
+  created_at: number
+  completed_at: number | null
+  expires_at: number | null
   model: string
-  status: 'queued' | 'in_progress' | 'succeeded' | 'failed'
-  video?: { url?: string; [k: string]: unknown } | null
-  data?: Array<{ url?: string; [k: string]: unknown }>
-  error?: OpenAiError | null
-  usage?: Record<string, unknown> | null
+  status: 'queued' | 'in_progress' | 'completed' | 'failed'
+  progress: number
+  seconds: string
+  size: string
+  prompt: string | null
+  remixed_from_video_id: string | null
+  error: { message: string; code: string; type?: string; param?: string | null } | null
+  /** 兼容扩展：生成媒体的下载地址。 */
+  url?: string
   [k: string]: unknown
 }
 

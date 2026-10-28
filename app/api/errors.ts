@@ -41,7 +41,7 @@ export const errors = {
     }),
   unknownEndpoint: (path: string) =>
     new GatewayError(
-      `Unknown API endpoint: ${path}. Supported endpoints: /models, /chat/completions, /images/generations, /images/edits, /video/generations, /video/generations/{task_id}.`,
+      `Unknown API endpoint: ${path}. Supported endpoints: /models, /chat/completions, /images/generations, /images/edits, /videos, /videos/{video_id}, /videos/{video_id}/content.`,
       { status: 404, type: 'invalid_request_error', code: 'unknown_endpoint' },
     ),
   methodNotAllowed: (allowed: string[]) =>

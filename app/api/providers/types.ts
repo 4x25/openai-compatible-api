@@ -1,12 +1,10 @@
 import type {
-  ChatCompletionChunk,
   ChatCompletionRequest,
-  ChatCompletionResponse,
   ImageGenerationRequest,
   ImagesResponse,
   ModelInfo,
-  VideoGenerationRequest,
-  VideoGenerationResponse,
+  VideoCreateRequest,
+  VideoResponse,
 } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -17,6 +15,10 @@ import type {
 export interface UpstreamRequest {
   /** 相对于 baseUrl 的路径，以 / 开头 */
   path: string
+  /** 覆盖请求的 API 前缀（例如供应商的版本外轮询端点）。 */
+  baseUrl?: string
+  /** 合并到 baseUrl 的查询参数，避免作为 pathname 编码。 */
+  query?: Record<string, string>
   method?: string
   headers?: HeadersInit
   /** JSON 请求体（与 formData 二选一） */
@@ -71,22 +73,40 @@ export interface ImageAdapter {
   path: string
   unsupportedParams?: string[]
   extraParams?: string[]
+  maxRequestBytes?: number
   /**
    * 转换标准请求 -> 上游请求。
    * 默认：json = 过滤后的标准请求体。
    */
-  transformRequest?: (req: ImageGenerationRequest, ctx: ProviderCallContext) => Promise<UpstreamRequest> | UpstreamRequest
+  transformRequest?: (req: ImageGenerationRequest, ctx: ProviderCallContext) => Promise<UpstreamRequest | UpstreamRequest[]> | UpstreamRequest | UpstreamRequest[]
+  /** 解析并过滤原始 multipart；未声明时保持默认白名单和文件透传行为。 */
+  transformMultipartRequest?: (form: FormData, ctx: ProviderCallContext) => Promise<UpstreamRequest | UpstreamRequest[]> | UpstreamRequest | UpstreamRequest[]
+  /** 所有图片分支响应的累计字节上限。 */
+  maxResponseBytes?: number
   /** 转换上游响应 -> 标准响应 */
   transformResponse?: (res: unknown, ctx: ProviderCallContext) => Promise<ImagesResponse> | ImagesResponse
 }
 
+export interface VideoResponseContext {
+  requestModel?: string
+  videoId?: string
+}
+
 export interface VideoAdapter {
-  /** 上游端点路径；任务查询适配器中可用 {task_id} 占位符 */
+  /** 上游端点路径；查询适配器可用 {video_id} 占位符。 */
   path: string
   unsupportedParams?: string[]
   extraParams?: string[]
-  transformRequest?: (req: VideoGenerationRequest, ctx: ProviderCallContext) => Promise<UpstreamRequest> | UpstreamRequest
-  transformResponse?: (res: unknown, ctx: ProviderCallContext) => Promise<VideoGenerationResponse> | VideoGenerationResponse
+  maxRequestBytes?: number
+  transformRequest?: (req: VideoCreateRequest, ctx: ProviderCallContext) => Promise<UpstreamRequest> | UpstreamRequest
+  transformMultipartRequest?: (form: FormData, ctx: ProviderCallContext) => Promise<UpstreamRequest> | UpstreamRequest
+  transformTaskRequest?: (videoId: string, ctx: ProviderCallContext) => Promise<UpstreamRequest> | UpstreamRequest
+  transformResponse?: (res: unknown, ctx: ProviderCallContext, info: VideoResponseContext) => Promise<unknown> | unknown
+}
+
+export interface VideoContentAdapter {
+  /** 从查询结果中获取媒体地址；默认使用顶层 url。 */
+  resolveUrl?: (video: VideoResponse) => string | undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -131,5 +151,6 @@ export interface Provider {
   video?: {
     create?: VideoAdapter
     get?: VideoAdapter
+    content?: VideoContentAdapter
   }
 }

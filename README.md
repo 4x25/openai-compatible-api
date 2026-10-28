@@ -42,11 +42,12 @@ curl https://example.com/ifm/https://api.ifm.ai/v1/chat/completions ...
 | `/models` | GET | 模型列表（必须） |
 | `/chat/completions` | POST | 文本模型（必须） |
 | `/images/generations` | POST | 图像模型 |
-| `/images/edits` | POST | 图像模型（multipart/form-data） |
-| `/video/generations` | POST | 视频模型：创建任务 |
-| `/video/generations/{task_id}` | GET | 视频模型：查询任务 |
+| `/images/edits` | POST | 图像编辑（multipart/form-data，按供应商能力接受 JSON） |
+| `/videos` | POST | 视频模型：创建任务（JSON / multipart/form-data） |
+| `/videos/{video_id}` | GET | 视频模型：查询任务 |
+| `/videos/{video_id}/content` | GET | 视频内容下载（支持 Range） |
 
-无任务存储：`task_id` 直接使用上游返回值，查询透传给上游。
+视频响应采用 OpenAI Videos 结构：`object: "video"`，状态为 `queued` / `in_progress` / `completed` / `failed`。每次查询由供应商适配器解析公开 ID 并调用上游，无需任务存储。
 
 ## 抹平规则
 
@@ -115,6 +116,7 @@ app/
     providers/
       types.ts               # Provider / ChatAdapter / ImageAdapter / VideoAdapter 契约
       registry.ts            # 注册表（registerProvider 即插件入口）
+      agnes.ts               # Agnes 文本、图片和视频适配
       ifm.ts                 # IFM 消息与推理字段适配
       inceptionlabs-playground.ts  # Inception Labs Playground
 ```
@@ -125,6 +127,7 @@ app/
 | --- | --- | --- | --- |
 | `inceptionlabs-playground` | `/playground`（流式+非流式） | `mercury-2` / `mercury-2.5` / `mercury-3` | 无需鉴权（`auth: 'none'`，不转发客户端凭证） |
 | `ifm` | `/chat/completions`（流式+非流式） | `IFM/K2-Horizon-375B-A23B` / `IFM/Jais-3-MoVA-36B-A4B` | 客户端凭证透传 |
+| `agnes` | `/chat/completions`、`/images/generations`、`/images/edits`、`/videos` 与查询/下载 | `agnes-3.0-flash` / `agnes-image-2.5-flash` / `agnes-video-2.5-flash` | 客户端凭证透传 |
 
 `inceptionlabs-playground` 的已知怪癖（详见 `app/api/providers/inceptionlabs-playground.ts` 注释）：上游省略 `stream` 字段时默认流式返回，网关对非流式请求显式补 `stream:false`；`reasoning_effort` 取值 `instant`/`low`/`medium`/`high`；其余 OpenAI 参数（`temperature`、`tools` 等）上游静默忽略。
 
@@ -141,25 +144,80 @@ baseUrl 使用 `https://example.com/ifm/v1`，默认上游为 `https://api.ifm.a
 
 参考：[IFM Chat API](https://docs.ifm.ai/docs/chat-completions.md)、[多轮历史](https://docs.ifm.ai/docs/multi-turn.md)、[流式约定](https://docs.ifm.ai/docs/streaming.md)。
 
+### Agnes
+
+baseUrl 使用 `https://example.com/agnes/v1`，默认上游为 `https://apihub.agnes-ai.com/v1`；可通过 `AGNES_BASE_URL` 或显式 baseUrl 覆盖。开发兜底凭证使用 `AGNES_API_KEY_FOR_DEV`。
+
+**文本**
+
+- `developer` 按原顺序映射为 `system`；支持文本与 `image_url` 内容块。嵌套未知字段及不兼容的内容块过滤后，消息仍需包含有效内容。
+- `max_completion_tokens` 优先于 `max_tokens`，统一转换为上游 `max_tokens`。
+- `reasoning_effort: "none"` 映射为 `chat_template_kwargs.enable_thinking: false`，其他显式字符串取值映射为 `true`；未传时保持上游默认行为。标准参数优先于同名扩展，保留 `chat_template_kwargs` 的其他成员。
+- 工具调用历史保留 `tool_calls` 和 `tool_call_id`，assistant 工具调用消息的空 content 归一化为 `null`；tool 结果中的文本块数组按顺序拼为字符串。流式输出复用网关的 usage 与 `[DONE]` 规则。
+
+**图片**
+
+- 标准 `response_format` 转为 `extra_body.response_format`，优先于扩展中的格式和 `return_base64`。默认 `size: "1024x1024"`；可传 `1K` / `2K` / `3K` / `4K` 和 `ratio`。
+- 图像生成可通过 `extra_body.image` 传入参考图；编辑支持 JSON 的 `images` / `image` 和 multipart 的 `image` / `image[]`，上传文件转换为 Data URI，再以 `extra_body.image` 调用上游图像生成接口。标准编辑输入优先于扩展参考图。
+- `n` 支持 1–10，拆为多次并发上游生成，按请求顺序合并 `data`。任一分支失败则整体返回错误，不返回部分结果、不自动重试；已经执行的分支仍可能计费。
+- 媒体请求体上限为 50 MiB，单文件 20 MiB，编辑最多 16 张参考图；所有图片分支响应累计上限为 64 MiB。
+
+**视频**
+
+- 支持 JSON 与官方 SDK multipart（含嵌套扩展和重复数组字段）；`input_reference` 图片上传或 URL 转为 `first_frame`。文件缺少 MIME 时依据常见光栅图签名识别类型。`first_frame` / `last_frame` 推断为 `keyframe`，图片或音频参考推断为 `reference`，其余为 `text`；显式 mode 与素材需匹配。
+- `seconds` 支持 4–12 的整数或整数字符串，上游统一发送字符串。默认 4 秒、720P、9:16；显式 `size: "720P"` 默认 16:9。OpenAI 像素尺寸映射为 720P 及横/竖屏比例，像素尺寸优先于冲突的 `aspect_ratio`；实际输出分辨率以生成文件为准。
+- `extra_body` 中的画幅、模式、媒体和种子字段提升至上游顶层，客户端顶层字段优先。Flash 参考输入最多 5 张图片、3 段音频，生成数量为 1。
+- 创建响应的公开 `id` 为 `agnes-video-2.5-flash:<video_id>`，保留原始 `video_id` 和 `task_id`。查询使用公开 ID 或原始 video ID，始终携带模型名；完成响应只有 task ID 时，公开 ID 仍保持一致。
+- `/videos/{video_id}/content` 先查询一次状态，完成后从 `url` 或 `metadata.url` 取得媒体并流式下载；支持 `variant=video` 和单段字节 Range。媒体请求不携带供应商凭证，采用 identity 编码；下载仅接受视频/二进制类型，以附件形式返回并采用私有缓存策略。上游仍返回压缩编码时，整段下载剥除失效长度头，Range 下载返回结构化错误。
+
+```ts
+import OpenAI from 'openai'
+
+const client = new OpenAI({
+  apiKey: 'YOUR_API_KEY',
+  baseURL: 'https://example.com/agnes/v1',
+})
+
+const chat = await client.chat.completions.create({
+  model: 'agnes-3.0-flash',
+  messages: [{ role: 'user', content: '简要介绍 Hono。' }],
+  reasoning_effort: 'none',
+})
+
+const created = await client.videos.create({
+  model: 'agnes-video-2.5-flash',
+  prompt: 'A slow camera push through a quiet forest.',
+  seconds: '4',
+  size: '1280x720',
+})
+const video = await client.videos.retrieve(created.id)
+// 由客户端按需轮询；完成后获取媒体字节。
+if (video.status === 'completed') {
+  const content = await client.videos.downloadContent(created.id)
+  const bytes = await content.arrayBuffer()
+}
+```
+
+参考：[Agnes 3.0 Flash](https://agnes-ai.com/zh-Hans/docs/agnes-30-flash.md)、[Agnes Image 2.5 Flash](https://agnes-ai.com/zh-Hans/docs/agnes-image-25-flash.md)、[Agnes Video 2.5 Flash](https://agnes-ai.com/zh-Hans/docs/agnes-video-25-flash.md)。
+
 ## 新增供应商
 
 1. 新建 `app/api/providers/<id>.ts`：
 
 ```ts
-import { registerProvider } from './registry'
 import type { Provider } from './types'
 
-registerProvider({
-  id: 'agnes',
-  name: 'Agnes AI',
-  defaultBaseUrl: 'https://apihub.agnes-ai.com/v1',
-  models: [{ id: 'agnes-1', ownedBy: 'agnes' }],
+export const exampleProvider = {
+  id: 'example',
+  name: 'Example Provider',
+  defaultBaseUrl: 'https://upstream.example/v1',
+  models: [{ id: 'example-model', ownedBy: 'example' }],
   // 认证透传为默认行为；上游用 x-api-key 时：
   // auth: { header: 'x-api-key', scheme: '' },
   chat: {
     // 上游就是 OpenAI compatible 时零配置；不支持的参数：
     // unsupportedParams: ['logprobs'],
-    // 私有参数放行：extraParams: ['agnes_mode'],
+    // 私有参数放行：extraParams: ['vendor_mode'],
     // 非 OpenAI 协议时用三个 hook 适配：
     // transformRequest / transformResponse / transformStreamChunk
   },
@@ -167,15 +225,16 @@ registerProvider({
     generations: { path: '/images/generations' },
   },
   video: {
-    create: { path: '/video/generations' },
-    get: { path: '/video/generations/{task_id}' },
+    create: { path: '/videos' },
+    get: { path: '/videos/{video_id}' },
+    content: {},
   },
-} satisfies Provider)
+} satisfies Provider
 ```
 
-2. 在 `app/api/providers/registry.ts` 顶部 import 该文件（或在其中调用 `registerProvider`）。
+2. 在 `app/api/providers/registry.ts` import 该对象并调用 `registerProvider(exampleProvider)`。
 
-3. 可选设置 `AGNES_BASE_URL` / `AGNES_API_KEY_FOR_DEV` 环境变量。完成——`https://example.com/agnes/v1/*` 立即可用。
+3. 可选设置 `EXAMPLE_BASE_URL` / `EXAMPLE_API_KEY_FOR_DEV` 环境变量。完成——`https://example.com/example/v1/*` 立即可用。
 
 能力由适配器是否存在决定：不声明 `chat` 则 `/chat/completions` 返回结构化的 `unsupported_endpoint`，不会误转发。
 
