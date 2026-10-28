@@ -142,17 +142,6 @@ describe('路由与错误抹平', () => {
     expect(res.headers.get('x-request-id')).toBeTruthy()
   })
 
-  it('saltyfish 暴露且仅暴露 3 个指定模型', async () => {
-    const { app } = makeApp(() => jsonRes({}))
-    const res = await app.request('/saltyfish/v1/models')
-    const body = await res.json()
-    expect(body.data.map((m: { id: string }) => m.id).sort()).toEqual([
-      'claude-fable-5-1',
-      'claude-opus-5-5',
-      'gpt-6-astra',
-    ])
-  })
-
   it('未知供应商返回 OpenAI 错误信封', async () => {
     const { app } = makeApp(() => jsonRes({}))
     const res = await app.request('/nope/v1/models')
@@ -519,7 +508,7 @@ describe('上游错误抹平', () => {
     expect(body.error.param).toBeNull()
   })
 
-  it('纯文本 502（saltyfish 风格）-> 502 OpenAI 错误', async () => {
+  it('纯文本 502 -> 502 OpenAI 错误', async () => {
     const { app } = makeApp(() => new Response('error code: 502', { status: 502, headers: { 'content-type': 'text/plain' } }))
     const res = await app.request('/mock/v1/chat/completions', chatReq)
     expect(res.status).toBe(502)
@@ -604,7 +593,7 @@ describe('图片端点', () => {
 
   it('供应商无图片能力时返回 unsupported_endpoint', async () => {
     const { app, calls } = makeApp(() => jsonRes({}))
-    const res = await app.request('/saltyfish/v1/images/generations', {
+    const res = await app.request('/mocktext/v1/images/generations', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'x', prompt: 'y' }),

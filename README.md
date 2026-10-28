@@ -27,10 +27,10 @@ https://example.com/<provider>/<providerBaseUrl>   ← 任意上游 http(s) URL�
 
 ```bash
 # 标准形式
-curl https://example.com/saltyfish/v1/chat/completions ...
+curl https://example.com/ifm/v1/chat/completions ...
 
 # 显式指定上游 baseUrl
-curl https://example.com/saltyfish/https://ai.saltyfish.live/v1/chat/completions ...
+curl https://example.com/ifm/https://api.ifm.ai/v1/chat/completions ...
 ```
 
 省略版本前缀（`/<provider>/chat/completions`）同样有效；`/<provider>/v1` 中的 `v1` 只是标记，实际上游地址始终由 env/默认值决定。自定义 baseUrl 支持任意 host、端口、路径与查询参数，也支持百分号编码形式（`https%3A%2F%2F...`）。
@@ -115,14 +115,14 @@ app/
     providers/
       types.ts               # Provider / ChatAdapter / ImageAdapter / VideoAdapter 契约
       registry.ts            # 注册表（registerProvider 即插件入口）
-      saltyfish.ts           # 首个供应商
+      ifm.ts                 # IFM 消息与推理字段适配
+      inceptionlabs-playground.ts  # Inception Labs Playground
 ```
 
 ## 供应商
 
 | id | 端点 | 模型 | 鉴权 |
 | --- | --- | --- | --- |
-| `saltyfish` | `/chat/completions`（流式+非流式） | `claude-fable-5-1` / `claude-opus-5-5` / `gpt-6-astra` | 客户端凭证透传 |
 | `inceptionlabs-playground` | `/playground`（流式+非流式） | `mercury-2` / `mercury-2.5` / `mercury-3` | 无需鉴权（`auth: 'none'`，不转发客户端凭证） |
 | `ifm` | `/chat/completions`（流式+非流式） | `IFM/K2-Horizon-375B-A23B` / `IFM/Jais-3-MoVA-36B-A4B` | 客户端凭证透传 |
 
