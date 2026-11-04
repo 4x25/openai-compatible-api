@@ -85,7 +85,7 @@ curl https://example.com/ifm/https://api.ifm.ai/v1/chat/completions ...
 
 - **默认供应商**（标准 `Authorization: Bearer`）：客户端 `Authorization` 原样透传；只传了 `x-api-key` 时转换为 `Authorization: Bearer`
 - **自定义认证供应商**：按 provider 的 `auth` 配置转换，例如剥掉 `Bearer` 前缀写入 `x-api-key`
-- **`auth: 'none'` 供应商**（如 `inceptionlabs-playground`）：上游无需鉴权，网关**主动剥离**客户端凭证、不读 dev key——即使客户端传了 `Authorization` 也不转发，避免把使用方发给本网关的 key 泄露给第三方上游
+- **`auth: 'none'` 供应商**：上游无需鉴权，网关**主动剥离**客户端凭证、不读 dev key——即使客户端传了 `Authorization` 也不转发，避免把使用方发给本网关的 key 泄露给第三方上游
 - 什么凭证都没有时不附加认证头，由上游决定 401
 - `*_API_KEY_FOR_DEV` 仅用于本地开发/联调（省去每次 curl 带 key），**生产环境永远不要设置**
 
@@ -118,18 +118,28 @@ app/
       registry.ts            # 注册表（registerProvider 即插件入口）
       agnes.ts               # Agnes 文本、图片和视频适配
       ifm.ts                 # IFM 消息与推理字段适配
-      inceptionlabs-playground.ts  # Inception Labs Playground
+      inception.ts           # Inception Labs API Key / Playground 双模式适配
 ```
 
 ## 供应商
 
 | id | 端点 | 模型 | 鉴权 |
 | --- | --- | --- | --- |
-| `inceptionlabs-playground` | `/playground`（流式+非流式） | `mercury-2` / `mercury-2.5` / `mercury-3` | 无需鉴权（`auth: 'none'`，不转发客户端凭证） |
+| `inception` | API Key：`/chat/completions`；Playground：`/playground`（均支持流式+非流式） | `mercury-3` / `mercury-2.5` / `mercury-2` | 普通 API Key 透传；凭证为 `playground` 时切换官方 Playground，不转发凭证 |
 | `ifm` | `/chat/completions`（流式+非流式） | `IFM/K2-Horizon-375B-A23B` / `IFM/Jais-3-MoVA-36B-A4B` | 客户端凭证透传 |
 | `agnes` | `/chat/completions`、`/images/generations`、`/images/edits`、`/videos` 与查询/下载 | `agnes-3.0-flash` / `agnes-image-2.5-flash` / `agnes-video-2.5-flash` | 客户端凭证透传 |
 
-`inceptionlabs-playground` 的已知怪癖（详见 `app/api/providers/inceptionlabs-playground.ts` 注释）：上游省略 `stream` 字段时默认流式返回，网关对非流式请求显式补 `stream:false`；`reasoning_effort` 取值 `instant`/`low`/`medium`/`high`；其余 OpenAI 参数（`temperature`、`tools` 等）上游静默忽略。
+### Inception
+
+baseUrl 使用 `https://example.com/inception/v1`，默认上游为 `https://api.inceptionlabs.ai/v1`；可通过 `INCEPTION_BASE_URL` 或显式 baseUrl 覆盖（仅 API Key 模式）。开发兜底凭证使用 `INCEPTION_API_KEY_FOR_DEV`。
+
+- 凭证为普通 API Key 时走官方 OpenAI 兼容接口，`Authorization` 原样透传；只传 `x-api-key` 时转换为 `Authorization: Bearer`。
+- 凭证写作 `playground`（大小写及首尾空白不敏感）时改走 `https://web-api-proxy.inceptionlabs.ai/v1/playground`，并主动剥离客户端凭证；该模式固定使用官方 Playground 地址，不读取 dev key。
+- 两种模式都会在省略 `reasoning_effort` 或取值为 `"none"` 时向上游发送 `"instant"`；`low` / `medium` / `high` 原样透传。
+- Playground 只发送 `model` / `messages` / `max_tokens` / `stream` / `reasoning_effort`：`max_completion_tokens` 转为 `max_tokens`，其余参数静默丢弃；省略 `stream` 时上游默认返回 SSE，因此始终显式发送布尔值。
+- Playground 不支持工具：非空 `tools` / `functions`、强制的 `tool_choice` / `function_call`，或消息历史中的工具调用/结果会在本地返回结构化 400，不访问上游。
+- Playground 响应中的 `tool_call_id`、空 `tool_calls`、`warning`、`reasoning_summary` 等额外字段由适配器剥掉。
+- 模型列表为静态声明，不调用上游 `/models`。
 
 ### IFM
 

@@ -45,6 +45,18 @@ export interface ProviderCallContext {
 // Chat 适配器
 // ---------------------------------------------------------------------------
 
+/** 按请求上下文覆盖 chat 上游目标 */
+export interface ChatUpstreamRoute {
+  /** 覆盖网关解析出的 baseUrl（例如切换到 Playground 上游） */
+  baseUrl?: string
+  /** 覆盖本适配器的端点路径 */
+  path?: string
+  /** 从已构建的请求头中删除的字段（例如无鉴权上游不转发客户端凭证） */
+  removeHeaders?: string[]
+  /** 追加或覆盖的请求头 */
+  headers?: HeadersInit
+}
+
 export interface ChatAdapter {
   /** 上游端点路径，默认 '/chat/completions' */
   path?: string
@@ -56,6 +68,14 @@ export interface ChatAdapter {
   unsupportedParams?: string[]
   /** 允许透传给上游的供应商私有参数（网关白名单之外的） */
   extraParams?: string[]
+  /**
+   * 根据请求与凭证选择上游目标。
+   * 未返回时使用本适配器的 path 与网关解析的 baseUrl。
+   */
+  resolveUpstream?: (
+    req: ChatCompletionRequest,
+    ctx: ProviderCallContext,
+  ) => ChatUpstreamRoute | undefined | Promise<ChatUpstreamRoute | undefined>
   /** 转换标准请求 -> 上游请求体；默认透传（深拷贝后的过滤结果） */
   transformRequest?: (req: ChatCompletionRequest, ctx: ProviderCallContext) => Promise<unknown> | unknown
   /** 转换上游非流式响应 -> 标准响应；默认透传 */

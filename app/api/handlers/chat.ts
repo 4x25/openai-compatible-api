@@ -68,7 +68,17 @@ export async function handleChat(req: ApiRequestContext): Promise<Response> {
     if (isRecord(transformed)) upstreamBody = transformed
   }
 
+  // 同一供应商可按凭证切换上游（例如 Inception 的 API Key / Playground）
+  const route = adapter.resolveUpstream
+    ? await adapter.resolveUpstream(upstreamBody as unknown as ChatCompletionRequest, upstream)
+    : undefined
+
   const headers = new Headers(req.headers)
+  for (const name of route?.removeHeaders ?? []) headers.delete(name)
+  if (route?.headers) {
+    const overrides = new Headers(route.headers)
+    overrides.forEach((value, name) => headers.set(name, value))
+  }
   headers.set('accept', upstreamStream ? 'text/event-stream' : 'application/json')
 
   const res = await callUpstream({
@@ -76,7 +86,8 @@ export async function handleChat(req: ApiRequestContext): Promise<Response> {
     timeoutMs,
     errorContext: 'chat/completions',
     request: {
-      path: adapter.path ?? '/chat/completions',
+      baseUrl: route?.baseUrl,
+      path: route?.path ?? adapter.path ?? '/chat/completions',
       method: 'POST',
       headers,
       json: upstreamBody,

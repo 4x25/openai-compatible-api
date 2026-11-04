@@ -1,6 +1,6 @@
 import type { Provider } from './types'
 import type { ModelInfo } from '../types'
-import { inceptionlabsPlayground } from './inceptionlabs-playground'
+import { inception } from './inception'
 import { ifm } from './ifm'
 import { agnes } from './agnes'
 
@@ -11,7 +11,7 @@ function register(provider: Provider): void {
   registry.set(provider.id.toLowerCase(), provider)
 }
 
-register(inceptionlabsPlayground)
+register(inception)
 register(ifm)
 register(agnes)
 

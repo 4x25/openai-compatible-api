@@ -6,7 +6,7 @@ describe('内置供应商注册', () => {
     expect(listProviders().map((provider) => provider.id).sort()).toEqual([
       'agnes',
       'ifm',
-      'inceptionlabs-playground',
+      'inception',
     ])
   })
 })
