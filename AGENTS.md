@@ -26,6 +26,7 @@ npm start           # cd dist && node --env-file-if-exists=../.env index.js
 ## 供应商插件
 
 - 新增供应商 = `app/api/providers/` 下一个文件 + 在 `registry.ts` 注册（`registerProvider`）。能力由 `chat`/`images`/`video` 适配器是否存在决定，未声明的能力返回结构化 `unsupported_endpoint` 而非误转发。
+- 调试透传供应商 `_`（`passthrough: true`）在 `matchApiRoute()` 中先于端点后缀匹配，`/_/*` 全部交给 `handlers/passthrough.ts` 原样转发；`pinned: true` 使其在 `listProviders()` 中固定置顶。它会把请求头（含 Cookie / 反代身份头）发往任意 http(s) 上游，仅限本机/可信环境，勿公网暴露。
 - 认证模型：客户端 `Authorization` > `x-api-key` > `${PROVIDER}_API_KEY_FOR_DEV`（仅开发兜底）。网关生产环境零内置密钥；任何真实 key 只能进 `.env`（已 gitignore），绝不进代码/文档/测试。
 
 ## 约束与坑

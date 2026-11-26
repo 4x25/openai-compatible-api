@@ -207,7 +207,7 @@ export async function callMedia(
   return fetchWithTimeout(ctx, parsed.toString(), { headers, redirect: 'follow' }, timeoutMs, 'video content')
 }
 
-async function fetchWithTimeout(
+export async function fetchWithTimeout(
   ctx: ProviderCallContext,
   url: string,
   init: RequestInit,

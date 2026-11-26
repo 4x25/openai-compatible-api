@@ -29,7 +29,7 @@ export interface UpstreamRequest {
 
 /** 供应商调用上下文：由网关构造 */
 export interface ProviderCallContext {
-  /** 本次请求实际使用的上游 baseUrl（无尾斜杠，可能是 env / 默认值 / 使用方自定义） */
+  /** 本次请求实际使用的上游 baseUrl（可能是 env / 默认值 / 使用方自定义） */
   baseUrl: string
   /** 使用方凭证（已剥掉 scheme）；未传时为 null */
   credential: string | null
@@ -148,6 +148,13 @@ export interface Provider {
   name: string
   /** 默认上游 baseUrl */
   defaultBaseUrl: string
+  /**
+   * 完全透传调试模式：仅 id 为 `_` 的供应商会命中 `/_/*` 特殊路由，
+   * 跳过端点匹配、方法校验、参数过滤、认证转换与响应抹平。
+   */
+  passthrough?: boolean
+  /** 在 listProviders() 中固定置顶（调试供应商使用） */
+  pinned?: boolean
   /**
    * 使用 /<provider>/v1 形式时，若 env baseUrl 未带路径则自动补全的版本前缀。
    * 默认 '/v1'。显式 baseUrl 永远原样使用。

@@ -13,6 +13,8 @@
  * 前缀为空或 /v1 时使用 env / 默认 baseUrl，为绝对 URL 时原样使用（自定义 baseUrl）。
  */
 
+import { PASSTHROUGH_PROVIDER_ID } from './providers/ids'
+
 export type EndpointKind =
   | 'models'
   | 'chat.completions'
@@ -21,6 +23,7 @@ export type EndpointKind =
   | 'videos.create'
   | 'videos.retrieve'
   | 'videos.content'
+  | 'passthrough'
 
 export interface GatewayRouteMatch {
   providerId: string
@@ -29,6 +32,8 @@ export interface GatewayRouteMatch {
   prefix: string
   /** 视频查询与下载专用。 */
   videoId: string
+  /** 完全透传供应商：provider 段之后的原始目标路径（不含查询串）。 */
+  target?: string
 }
 
 interface EndpointPattern {
@@ -89,6 +94,9 @@ export function matchApiRoute(url: string): GatewayRouteMatch | null {
   } catch {
     return null
   }
+  // 透传供应商固定置顶匹配：不依赖端点后缀，任意方法 / 任意路径都交给它。
+  const passthrough = matchPassthrough(path)
+  if (passthrough) return passthrough
   // 原样嵌入的上游 URL 可能把端点放在其查询串后；不能被上游路径自身的 /videos 抢先匹配。
   if (search && /^\/[^/]+\/https?:\/\//i.test(path)) {
     const byQuery = tryMatch(path + search)
@@ -101,6 +109,33 @@ export function matchApiRoute(url: string): GatewayRouteMatch | null {
   // （如 /<provider>/https://x/api?api-version=1/chat/completions）
   if (search) return tryMatch(path + search)
   return null
+}
+
+/** 透传路径需要绕过网关的 CORS 预检，使 OPTIONS 也能原样转发。 */
+export function isPassthroughRequest(url: string): boolean {
+  try {
+    return isPassthroughPath(new URL(url).pathname)
+  } catch {
+    return false
+  }
+}
+
+function isPassthroughPath(path: string): boolean {
+  const root = `/${PASSTHROUGH_PROVIDER_ID}`
+  return path === root || path.startsWith(`${root}/`)
+}
+
+function matchPassthrough(path: string): GatewayRouteMatch | null {
+  if (!isPassthroughPath(path)) return null
+  const root = `/${PASSTHROUGH_PROVIDER_ID}`
+  return {
+    providerId: PASSTHROUGH_PROVIDER_ID,
+    kind: 'passthrough',
+    prefix: '',
+    videoId: '',
+    // `/_` 本身转发到 baseUrl 根路径。
+    target: path.slice(root.length) || '/',
+  }
 }
 
 function tryMatch(trimmed: string): GatewayRouteMatch | null {
@@ -212,7 +247,9 @@ function normalizeConfiguredBaseUrl(raw: string, versionPath: string): string | 
   if (parsed.pathname === '/' || parsed.pathname === '') {
     parsed.pathname = versionPath.startsWith('/') ? versionPath : `/${versionPath}`
   }
-  return parsed.toString().replace(/\/+$/, '')
+  // 只去路径尾斜杠，避免改坏查询串值里的 "/"。
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '')
+  return parsed.toString()
 }
 
 /** 自定义 baseUrl：任意 host 允许，但必须是绝对 http(s) URL */
@@ -227,5 +264,23 @@ export function parseUpstreamUrl(raw: string): string | null {
   parsed.username = ''
   parsed.password = ''
   parsed.hash = ''
-  return parsed.toString().replace(/\/+$/, '')
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '')
+  return parsed.toString()
+}
+
+/**
+ * 透传目标 URL：保留 pathname 尾斜杠与查询串编码，且拒绝 fetch 不支持的 userinfo。
+ * 与 baseUrl 不同，这里不做任何路径归一化。
+ */
+export function parseRawUpstreamUrl(raw: string): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+  if (parsed.username || parsed.password) return null
+  parsed.hash = ''
+  return parsed.toString()
 }

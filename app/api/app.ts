@@ -3,13 +3,14 @@ import type { Context, MiddlewareHandler } from 'hono'
 import { cors } from 'hono/cors'
 import { errors, GatewayError, gatewayErrorBody } from './errors'
 import { errorResponse, gatewayErrorResponse, internalErrorResponse } from './http'
-import { endpointMethods, matchApiRoute, resolveBaseUrl } from './router'
+import { endpointMethods, isPassthroughRequest, matchApiRoute, resolveBaseUrl } from './router'
 import { envPrefix, getProvider } from './providers/registry'
 import { buildUpstreamHeaders, DEFAULT_TIMEOUT_MS, providerEnv } from './upstream'
 import { handleModels } from './handlers/models'
 import { handleChat } from './handlers/chat'
 import { handleImages } from './handlers/images'
 import { handleVideoContent, handleVideoCreate, handleVideoTask } from './handlers/video'
+import { handlePassthrough } from './handlers/passthrough'
 import type { ApiRequestContext } from './handlers/types'
 
 export interface GatewayOptions {
@@ -24,8 +25,13 @@ export function createGatewayApp(options: GatewayOptions = {}): Hono {
 
   const app = new Hono()
 
-  // 独立部署时也开放任意 origin 的 CORS（HonoX 集成时由外层中间件统一处理预检）
-  app.use('*', cors())
+  // 独立部署时也开放任意 origin 的 CORS（HonoX 集成时由外层中间件统一处理预检）。
+  // 透传路径的 OPTIONS 要原样转发，不能被预检短路；其他方法仍走正常 CORS。
+  const corsMiddleware = cors()
+  app.use('*', async (c, next) => {
+    if (c.req.method === 'OPTIONS' && isPassthroughRequest(c.req.url)) return next()
+    return corsMiddleware(c, next)
+  })
 
   app.all('*', async (c) => {
     const requestId = `gw-${crypto.randomUUID()}`
@@ -52,6 +58,15 @@ async function dispatch(
   const provider = getProvider(match.providerId)
   if (!provider) throw errors.unknownProvider(match.providerId)
 
+  const env = envOverride ? { ...envOverride } : providerEnv(c.env)
+  const timeoutMs = parseTimeout(env.UPSTREAM_TIMEOUT_MS)
+
+  // 调试供应商：任意端点 / 方法原样转发，不做任何网关处理
+  if (match.kind === 'passthrough') {
+    if (!provider.passthrough) throw errors.unknownEndpoint(c.req.path)
+    return handlePassthrough({ c, provider, match, env, fetch: fetchImpl, timeoutMs })
+  }
+
   // 方法校验（OPTIONS 预检已由 cors 中间件处理）
   const allowed = endpointMethods(match.kind)
   if (!allowed.includes(c.req.method)) {
@@ -63,7 +78,6 @@ async function dispatch(
   }
 
   // baseUrl 解析：/<provider>/v1 -> env/默认；/<provider>/<任意URL> -> 原样使用
-  const env = envOverride ? { ...envOverride } : providerEnv(c.env)
   const envBaseUrl = env[`${envPrefix(provider.id)}_BASE_URL`]
   const resolved = resolveBaseUrl(match.prefix, {
     defaultBaseUrl: provider.defaultBaseUrl,
@@ -71,8 +85,6 @@ async function dispatch(
     envBaseUrl,
   })
   if (!resolved) throw errors.invalidBaseUrl(match.prefix)
-
-  const timeoutMs = parseTimeout(env.UPSTREAM_TIMEOUT_MS)
 
   // 认证：客户端 Authorization > 客户端 x-api-key > ${PROVIDER}_API_KEY_FOR_DEV
   const { headers, credential } = buildUpstreamHeaders(
@@ -134,7 +146,8 @@ function parseTimeout(raw: string | undefined): number {
 
 function withRequestId(response: Response, requestId: string): Response {
   const headers = new Headers(response.headers)
-  headers.set('x-request-id', requestId)
+  // 上游已提供时保留，方便透传调试与上游日志对账。
+  if (!headers.has('x-request-id')) headers.set('x-request-id', requestId)
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

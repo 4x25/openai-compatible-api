@@ -71,8 +71,8 @@ curl https://example.com/ifm/https://api.ifm.ai/v1/chat/completions ...
 状态码映射：上游 4xx 保留原状态，5xx 统一为 502，超时为 504；未知供应商/端点、方法不支持（405 + `Allow`）、缺参、非法 baseUrl 等全部为 OpenAI 格式 JSON。
 
 - **杂牌响应兜底**：上游 200 返回纯文本时包装为 `assistant` content；图片接口返回二进制时自动转 `b64_json`
-- **CORS**：任意 origin 放行
-- 每个响应携带 `x-request-id`
+- **CORS**：任意 origin 放行（`_` 的 OPTIONS 原样转发，由上游决定预检响应）
+- 每个响应携带 `x-request-id`（上游已提供时保留上游值）
 - 流式统计由 `stream_options.include_usage` 控制：请求时在结束 chunk 之后输出一个 `choices: []` 的 usage chunk，再输出 `[DONE]`；上游未提供统计时不合成数值。上游错误的 `Retry-After` 会保留。
 
 ## 认证模型
@@ -97,6 +97,8 @@ curl https://example.com/ifm/https://api.ifm.ai/v1/chat/completions ...
 | `${PROVIDER}_API_KEY_FOR_DEV` | 否 | 开发/联调兜底凭证，生产环境不设置 |
 | `UPSTREAM_TIMEOUT_MS` | 否 | 上游超时（毫秒），默认 300000 |
 
+调试透传供应商 `_` 的 baseUrl 变量按命名规则为 `__BASE_URL`（id `_` + `_BASE_URL`）。
+
 开发模式由 `vite.config.ts` 自动把 `.env` 注入 `process.env`；生产 `npm start` 通过 `node --env-file-if-exists` 加载，实际部署时用平台环境变量即可。
 
 ## 架构
@@ -112,10 +114,11 @@ app/
     params.ts                # 参数白名单过滤
     errors.ts                # OpenAI 错误信封 + 上游错误归一化
     http.ts                  # JSON/SSE 响应工具
-    handlers/                # models / chat / images / video 端点处理
+    handlers/                # models / chat / images / video / passthrough 端点处理
     providers/
       types.ts               # Provider / ChatAdapter / ImageAdapter / VideoAdapter 契约
       registry.ts            # 注册表（registerProvider 即插件入口）
+      passthrough.ts         # `_` 完全透传调试供应商
       agnes.ts               # Agnes 文本、图片和视频适配
       ifm.ts                 # IFM 消息与推理字段适配
       inception.ts           # Inception Labs API Key / Playground 双模式适配
@@ -125,9 +128,34 @@ app/
 
 | id | 端点 | 模型 | 鉴权 |
 | --- | --- | --- | --- |
+| `_` | 任意路径与方法（完全透传，调试用） | 由上游决定 | 客户端请求头原样转发 |
 | `inception` | API Key：`/chat/completions`；Playground：`/playground`（均支持流式+非流式） | `mercury-3` / `mercury-2.5` / `mercury-2` | 普通 API Key 透传；凭证为 `playground` 时切换官方 Playground，不转发凭证 |
 | `ifm` | `/chat/completions`（流式+非流式） | `IFM/K2-Horizon-375B-A23B` / `IFM/Jais-3-MoVA-36B-A4B` | 客户端凭证透传 |
 | `agnes` | `/chat/completions`、`/images/generations`、`/images/edits`、`/videos` 与查询/下载 | `agnes-3.0-flash` / `agnes-image-2.5-flash` / `agnes-video-2.5-flash` | 客户端凭证透传 |
+
+### 完全透传调试（`_`）
+
+`_` 是固定置顶的调试供应商：`/_` 之后的整个路径都交给它，不参与端点后缀匹配，也不做任何抹平。
+
+> ⚠️ `_` 会把任意路径、方法、请求头（包括 `Cookie` 与反向代理注入的身份头）发往任意 http(s) 上游。它只适合本机/可信环境调试，不要在公网暴露；公网部署必须在网关前加访问控制，或不要部署带该供应商的实例。
+
+```bash
+# 原样转发到指定 URL：任意方法、路径、查询串、请求头与请求体
+curl -X PUT 'https://example.com/_/https://upstream.example/v1/custom/path?x=1' \
+  -H 'Authorization: Bearer sk-xxx' \
+  -d '{"anything":true}'
+
+# 相对形式拼到 __BASE_URL；未设置时默认 https://api.openai.com/v1
+curl 'https://example.com/_/v1/chat/completions' ...
+```
+
+- `/_/https://...`、`/_/http://...` 直接作为上游 URL；整体编码形式（如 `https%3A%2F%2F...`）只解码一次，路径内的 `%2F` / `%3F` 与尾斜杠保留。其余路径拼到 `__BASE_URL` / 默认 baseUrl，开头的 `/v1` 仅作版本标记。
+- 带 userinfo 的 URL 与非 http(s) 的绝对目标返回 `400 invalid_base_url`。
+- 请求体以流转发：不解析 JSON、不校验 `model` / `messages`、不筛选参数；不转换认证头（`x-api-key` 不会变成 `Authorization`）。
+- 支持 fetch 允许的 HTTP 方法（TRACE / CONNECT 除外）；OPTIONS 原样转发，不被网关 CORS 预检短路。非 OPTIONS 响应仍由网关补 CORS 头，浏览器跨域调用需要上游自行正确响应预检。
+- 上游状态码、响应头与正文原样返回，包括非 2xx、纯文本与 SSE；不聚合、不补 `[DONE]`、不套 OpenAI 错误信封。仅剔除代理必须处理的逐跳头（含 `Connection` 列举字段）与 `host` / `content-length`。
+- 请求上游使用 `accept-encoding: identity`；`fetch` 仍自动解压时移除失效的 `content-encoding` / `content-length`，`identity` 编码保持原样。网关只在响应缺少 `x-request-id` 时补充自己的 ID。
+- `/_` 是保留命名空间；未来不要把 HonoX 页面放在该路径下。
 
 ### Inception
 
@@ -280,4 +308,5 @@ npm run typecheck   # tsc --noEmit
 
 - 网关生产环境零内置密钥；上游凭证由使用方随请求提供，发往哪个上游也由使用方选择
 - `*_API_KEY_FOR_DEV` 兜底凭证会发往任意自定义 baseUrl，请仅在本机/可信环境使用
+- `_` 完全透传供应商会把请求头（含 `Cookie`、反向代理身份头）原样发往任意 http(s) 上游，并能访问内网/云元数据地址；只用于本机/可信环境调试，公网部署必须加访问控制或不要启用该供应商
 - 公网部署时建议在网关前自行加访问控制（如平台侧鉴权 / 反向代理限制），避免被第三方消耗上游配额
