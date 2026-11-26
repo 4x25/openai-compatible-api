@@ -302,6 +302,10 @@ npm run typecheck   # tsc --noEmit
 
 构建根据 Vercel 自动注入的 `VERCEL=1` 生成 `.vercel/output`，包含 Node 函数、路由及静态资源。请求由 Vercel 调用函数处理。业务环境变量在项目设置中配置。
 
+当前正式环境：<https://compatible-openai-api.vercel.app/>
+
+Vercel 会把路径中的 `//` 归一化为 `/` 并返回 `308`：`/_/https://...` 跟随重定向后仍可正常透传（单斜杠形式也按 URL 解析），不跟随重定向的客户端请使用整体编码形式 `/_/https%3A%2F%2F...`。
+
 本地可执行 `VERCEL=1 npm run build` 验证 Vercel 产物。普通 `npm run build` 仍生成可供 `npm start` 运行的 Node 产物。
 
 ## 安全说明
