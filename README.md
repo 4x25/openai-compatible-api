@@ -258,6 +258,24 @@ npm test            # Vitest 测试（路由/认证/参数/流式矩阵/错误�
 npm run typecheck   # tsc --noEmit
 ```
 
+## 部署
+
+### Hostless / Node
+
+执行 `npm run build` 后使用 `npm start` 启动。服务监听 `0.0.0.0`，启动时读取 `PORT`（默认 `3000`）；Hostless 自动注入平台端口。
+
+### Vercel
+
+导入仓库，选择 Framework Preset 为 `Other`。仓库中的 `vercel.json` 已配置：
+
+- Install Command：`npm install`
+- Build Command：`npm run build`
+- Output Directory：保持默认，关闭手动 Override
+
+构建根据 Vercel 自动注入的 `VERCEL=1` 生成 `.vercel/output`，包含 Node 函数、路由及静态资源。请求由 Vercel 调用函数处理。业务环境变量在项目设置中配置。
+
+本地可执行 `VERCEL=1 npm run build` 验证 Vercel 产物。普通 `npm run build` 仍生成可供 `npm start` 运行的 Node 产物。
+
 ## 安全说明
 
 - 网关生产环境零内置密钥；上游凭证由使用方随请求提供，发往哪个上游也由使用方选择

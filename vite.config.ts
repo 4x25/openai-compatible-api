@@ -1,4 +1,6 @@
 import build from '@hono/vite-build/node'
+import vercel from '@hono/vite-build/vercel'
+import { cpSync } from 'node:fs'
 import adapter from '@hono/vite-dev-server/node'
 import tailwindcss from '@tailwindcss/vite'
 import honox from 'honox/vite'
@@ -11,6 +13,7 @@ export default defineConfig(({ mode }) => {
   for (const [key, value] of Object.entries(fileEnv)) {
     if (process.env[key] === undefined) process.env[key] = value
   }
+  const isVercel = process.env.VERCEL === '1'
 
   return {
     plugins: [
@@ -19,7 +22,18 @@ export default defineConfig(({ mode }) => {
         client: { input: ['/app/client.ts', '/app/style.css'] }
       }),
       tailwindcss(),
-      build({
+      isVercel ? [
+        vercel(),
+        {
+          name: 'vercel-client-assets',
+          apply: 'build' as const,
+          closeBundle() {
+            if (mode === 'client') return
+            // HonoX 从 dist/.vite 读取 manifest；将客户端资源复制到 Vercel 静态目录。
+            cpSync('dist/static', '.vercel/output/static/static', { recursive: true })
+          }
+        }
+      ] : build({
         // 在生成的 Node 入口中读取 PORT，避免构建时将端口固定下来。
         entryContentAfterHooks: [
           (appName) => `
