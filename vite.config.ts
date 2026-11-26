@@ -19,7 +19,15 @@ export default defineConfig(({ mode }) => {
         client: { input: ['/app/client.ts', '/app/style.css'] }
       }),
       tailwindcss(),
-      build()
+      build({
+        // 在生成的 Node 入口中读取 PORT，避免构建时将端口固定下来。
+        entryContentAfterHooks: [
+          (appName) => `
+import { serve } from '@hono/node-server'
+serve({ fetch: ${appName}.fetch, hostname: '0.0.0.0', port: Number(process.env.PORT || 3000) })
+`
+        ]
+      })
     ],
   }
 })
