@@ -493,11 +493,11 @@ describe('IFM 错误归一化', () => {
     expect(calls).toHaveLength(1)
   })
 
-  it('保留 HTTP-date 格式 Retry-After，5xx 仍按既有规则映射 502', async () => {
+  it('保留 HTTP-date 格式 Retry-After，5xx 仍按既有规则映射 503', async () => {
     const retryAfter = 'Wed, 21 Oct 2026 07:28:00 GMT'
     const { app } = makeApp(() => jsonRes({ error: { message: 'Overloaded.' } }, 503, { 'retry-after': retryAfter }))
     const res = await app.request('/ifm/v1/chat/completions', chatReq())
-    expect(res.status).toBe(502)
+    expect(res.status).toBe(503)
     expect(res.headers.get('retry-after')).toBe(retryAfter)
   })
 })

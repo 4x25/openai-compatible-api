@@ -68,12 +68,12 @@ export const errors = {
   missingMessages: () => badRequest("Missing required parameter: 'messages'.", 'messages'),
   upstreamTimeout: (ms: number) =>
     new GatewayError(`Upstream request timed out after ${ms}ms.`, {
-      status: 504,
+      status: 503,
       type: 'api_error',
       code: 'upstream_timeout',
     }),
   upstreamError: (message: string) =>
-    new GatewayError(message, { status: 502, type: 'api_error', code: 'upstream_error' }),
+    new GatewayError(message, { status: 503, type: 'api_error', code: 'upstream_error' }),
 }
 
 /** 渲染为 OpenAI 错误响应体 */
@@ -144,11 +144,12 @@ export function normalizeUpstreamError(
   })
 }
 
-/** 上游状态码映射：客户端错误保留原状态，服务端错误统一 502 */
+/** 上游状态码映射：客户端错误保留原状态，服务端错误统一 503。
+ *  502 / 504 会被 Cloudflare 等前置代理替换成自身错误页，503 才能透传原始错误体。 */
 export function mapUpstreamStatus(status: number): number {
-  if (status >= 500) return 502
+  if (status >= 500) return 503
   if (status >= 400) return status
-  return 502
+  return 503
 }
 
 interface ExtractedError {

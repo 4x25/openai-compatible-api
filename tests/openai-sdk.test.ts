@@ -142,7 +142,7 @@ describe('官方 OpenAI SDK 协议兼容', () => {
     expect(created.id).toBe('agnes-video-2.5-flash:video-sdk')
     expect(created.object).toBe('video')
     expect(bodies.find((body) => body.model === 'agnes-video-2.5-flash')).toMatchObject({
-      first_frame: 'data:image/png;base64,AQID', mode: 'keyframe', seconds: '4', size: '720P', aspect_ratio: '16:9',
+      first_frame: 'data:image/png;base64,AQID', mode: 'keyframe', seconds: '4', size: '720P',
     })
     const retrieved = await client.videos.retrieve(created.id)
     expect(retrieved.id).toBe(created.id)

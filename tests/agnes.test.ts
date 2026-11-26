@@ -420,7 +420,7 @@ describe('Agnes 图片生成和编辑', () => {
     const { app } = makeApp((_req, index) => index === 0 ? new Response('not-json')
       : new Response(new ReadableStream<Uint8Array>({ cancel() { cancelled = true } })))
     const res = await app.request('/agnes/v1/images/generations', image({ n: 2 }))
-    expect(res.status).toBe(502)
+    expect(res.status).toBe(503)
     expect(cancelled).toBe(true)
   })
 
@@ -491,10 +491,10 @@ describe('Agnes 图片生成和编辑', () => {
 })
 
 describe('Agnes 视频创建', () => {
-  it.each(['task-only', null, []])('非对象视频创建信封返回 502：%j', async (body) => {
+  it.each(['task-only', null, []])('非对象视频创建信封返回 503：%j', async (body) => {
     const { app } = makeApp(() => json(body))
     const res = await app.request('/agnes/v1/videos', video())
-    expect(res.status).toBe(502)
+    expect(res.status).toBe(503)
     expect((await res.json()).error.code).toBe('upstream_error')
   })
 
@@ -602,7 +602,7 @@ describe('Agnes 视频创建', () => {
   it('创建信封缺少 video_id 不会误用 task id', async () => {
     const { app } = makeApp(() => json({ id: 'task-only', status: 'queued' }))
     const res = await app.request('/agnes/v1/videos', video())
-    expect(res.status).toBe(502)
+    expect(res.status).toBe(503)
     expect((await res.json()).error.code).toBe('upstream_error')
   })
 })
@@ -611,7 +611,7 @@ describe('Agnes 视频查询与内容下载', () => {
   it.each(['task-only', null, []])('非对象视频查询信封不能改写公开 ID：%j', async (body) => {
     const { app } = makeApp(() => json(body))
     const res = await app.request(`/agnes/v1/videos/${videoModel}:video-test`)
-    expect(res.status).toBe(502)
+    expect(res.status).toBe(503)
     expect((await res.json()).error.code).toBe('upstream_error')
   })
 
@@ -631,7 +631,7 @@ describe('Agnes 视频查询与内容下载', () => {
         cancel() { cancelled = true },
       }), { headers: { 'content-type': 'text/html' } }))
     const res = await app.request('/agnes/https://custom.example/v1/videos/evil/content')
-    expect(res.status).toBe(502)
+    expect(res.status).toBe(503)
     expect(await res.text()).not.toContain('<script>')
     expect(cancelled).toBe(true)
   })
@@ -662,7 +662,7 @@ describe('Agnes 视频查询与内容下载', () => {
     const { app } = makeApp((_req, index) => index === 0 ? json({ status: 'completed', url: 'https://media.example/video.mp4' })
       : new Response(new Uint8Array(100), { status: 206, headers: { 'content-type': 'video/mp4', 'content-encoding': 'gzip', 'content-range': 'bytes 0-23/24' } }))
     const res = await app.request(`/agnes/v1/videos/${videoModel}:video-test/content`, { headers: { range: 'bytes=0-23' } })
-    expect(res.status).toBe(502)
+    expect(res.status).toBe(503)
   })
 
   it.each([
@@ -752,7 +752,7 @@ describe('Agnes 视频查询与内容下载', () => {
   it.each([undefined, 'data:video/mp4;base64,AAAA', 'https://user:password@media.example/video.mp4'])('无效媒体 URL 不触发下载：%s', async (url) => {
     const { app, calls } = makeApp(() => json({ status: 'completed', url }))
     const res = await app.request(`/agnes/v1/videos/${videoModel}:video-test/content`)
-    expect(res.status).toBe(502)
+    expect(res.status).toBe(503)
     expect(calls).toHaveLength(1)
   })
 
@@ -792,7 +792,7 @@ describe('Agnes 错误边界', () => {
   it.each([400, 401, 403, 429, 500])('上游状态 %s 归一化并保留重试提示', async (status) => {
     const { app, calls } = makeApp(() => json({ detail: 'Upstream error' }, status, { 'retry-after': '2', 'set-cookie': 'private=test' }))
     const res = await app.request('/agnes/v1/chat/completions', chat())
-    expect(res.status).toBe(status >= 500 ? 502 : status)
+    expect(res.status).toBe(status >= 500 ? 503 : status)
     expect((await res.json()).error.message).toBe('Upstream error')
     expect(res.headers.get('retry-after')).toBe('2')
     expect(res.headers.get('set-cookie')).toBeNull()

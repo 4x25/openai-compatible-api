@@ -1,7 +1,18 @@
 import { errors, GatewayError } from '../errors'
 import { bytesToBase64, isRecord } from '../http'
-import type { ChatCompletionRequest, ChatRequestMessage, ImageGenerationRequest, VideoCreateRequest } from '../types'
-import type { ImageAdapter, Provider, ProviderCallContext, UpstreamRequest, VideoResponseContext } from './types'
+import type {
+  ChatCompletionRequest,
+  ChatRequestMessage,
+  ImageGenerationRequest,
+  VideoCreateRequest,
+} from '../types'
+import type {
+  ImageAdapter,
+  Provider,
+  ProviderCallContext,
+  UpstreamRequest,
+  VideoResponseContext,
+} from './types'
 
 const VIDEO_MODEL = 'agnes-video-2.5-flash'
 const MIB = 1024 * 1024
@@ -204,7 +215,7 @@ function formScalar(name: string, value: string, hasResponseFormat: boolean): un
   if (['start_seconds', 'require_audio'].includes(name)) {
     try { return JSON.parse(value) } catch { invalid(`${name} must contain a JSON scalar.`, name) }
   }
-  if (['extra_body', 'images', 'audios', 'videos'].includes(name)) {
+  if (['extra_body', 'images', 'reference_images', 'audios', 'videos'].includes(name)) {
     try { return JSON.parse(value) } catch { invalid(`${name} must contain valid JSON.`, name) }
   }
   if (name === 'return_base64' && !hasResponseFormat) {
@@ -343,7 +354,8 @@ function imageAdapter(edit: boolean): ImageAdapter {
 // ---------------------------------------------------------------------------
 
 const VIDEO_FIELDS = new Set(['model', 'prompt', 'seconds', 'size', 'input_reference', 'input_reference[image_url]',
-  'input_reference[file_id]', 'image', 'mode', 'aspect_ratio', 'seed', 'n', 'first_frame', 'last_frame', 'images', 'audios', 'videos', 'extra_body'])
+  'input_reference[file_id]', 'image', 'mode', 'aspect_ratio', 'seed', 'n', 'first_frame', 'last_frame',
+  'images', 'reference_images', 'audios', 'videos', 'extra_body'])
 const VIDEO_RATIOS = new Set(['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'])
 const VIDEO_PIXEL_RATIOS: Record<string, string> = {
   '720x1280': '9:16', '1280x720': '16:9', '1024x1792': '9:16', '1792x1024': '16:9',
@@ -361,6 +373,21 @@ function videoReference(value: unknown): string | undefined {
   invalid('input_reference requires an image URL or uploaded image.', 'input_reference')
 }
 
+/** Magpie 等客户端用 reference_images 表示 Agnes 的 images：URL 字符串或 { image_url } 引用。 */
+function videoReferences(value: unknown, param: string): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) invalid(`${param} must be an array.`, param)
+  return value.map((item, index) => {
+    const path = `${param}.${index}`
+    if (typeof item === 'string') return text(item, path)
+    if (!isRecord(item)) invalid('Reference image must be a URL or an image reference object.', path)
+    if (item.image_url !== undefined) {
+      return text(isRecord(item.image_url) ? item.image_url.url : item.image_url, `${path}.image_url`)
+    }
+    invalid('Reference image requires an image URL.', path)
+  })
+}
+
 function videoRequest(req: VideoCreateRequest): UpstreamRequest {
   const source: Record<string, unknown> = { ...req }
   const extra = optionalObject(req.extra_body, 'extra_body')
@@ -375,13 +402,16 @@ function videoRequest(req: VideoCreateRequest): UpstreamRequest {
   const inputSize = optionalText(source.size, 'size')
   const explicitRatio = optionalText(source.aspect_ratio, 'aspect_ratio')
   if (explicitRatio !== undefined && !VIDEO_RATIOS.has(explicitRatio)) invalid('Invalid video aspect_ratio.', 'aspect_ratio')
+  const sizeRatio = inputSize !== undefined && VIDEO_RATIOS.has(inputSize) ? inputSize : undefined
   const mappedRatio = inputSize !== undefined && Object.hasOwn(VIDEO_PIXEL_RATIOS, inputSize) ? VIDEO_PIXEL_RATIOS[inputSize] : undefined
-  if (inputSize !== undefined && inputSize !== '720P' && !mappedRatio) invalid('Flash size must be 720P or a supported OpenAI pixel size.', 'size')
-  const aspectRatio = mappedRatio ?? explicitRatio ?? (inputSize === undefined ? '9:16' : '16:9')
+  if (inputSize !== undefined && inputSize !== '720P' && !mappedRatio && !sizeRatio) {
+    invalid('Flash size must be 720P, a supported aspect ratio, or a supported OpenAI pixel size.', 'size')
+  }
+  const aspectRatio = sizeRatio ?? mappedRatio ?? explicitRatio ?? (inputSize === undefined ? '9:16' : '16:9')
   const firstFrame = source.input_reference !== undefined ? videoReference(source.input_reference)
     : optionalText(source.first_frame !== undefined ? source.first_frame : source.image, 'first_frame')
   const lastFrame = optionalText(source.last_frame, 'last_frame')
-  const images = stringArray(source.images, 'images')
+  const images = [...stringArray(source.images, 'images'), ...videoReferences(source.reference_images, 'reference_images')]
   const audios = stringArray(source.audios, 'audios')
   if (images.length > 5) invalid('Flash images length must not exceed 5.', 'images')
   if (audios.length > 3) invalid('Flash audios length must not exceed 3.', 'audios')
@@ -395,8 +425,12 @@ function videoRequest(req: VideoCreateRequest): UpstreamRequest {
   if (!['text', 'keyframe', 'reference'].includes(mode)) invalid('mode must be text, keyframe or reference.', 'mode')
   if ((mode === 'text' && (hasKeyframes || hasReferences))
     || (mode === 'keyframe' && (!hasKeyframes || hasReferences))
-    || (mode === 'reference' && (!hasReferences || hasKeyframes))) invalid('mode does not match the provided media.', 'mode')
-  const body: Record<string, unknown> = { model, prompt: text(req.prompt, 'prompt'), seconds: String(seconds), size: '720P', aspect_ratio: aspectRatio, mode }
+    || (mode === 'reference' && (!hasReferences || hasKeyframes))) {
+    invalid('mode does not match the provided media; text, keyframe and reference inputs cannot be mixed.', 'mode')
+  }
+  const body: Record<string, unknown> = { model, prompt: text(req.prompt, 'prompt'), seconds: String(seconds), size: '720P', mode }
+  // keyframe 的输出画幅跟随首帧，上游拒绝同时出现 aspect_ratio；显式传入也忽略。
+  if (mode !== 'keyframe') body.aspect_ratio = aspectRatio
   if (firstFrame !== undefined) body.first_frame = firstFrame
   if (lastFrame !== undefined) body.last_frame = lastFrame
   if (images.length) body.images = images
@@ -435,7 +469,9 @@ function videoTaskRequest(id: string, ctx: ProviderCallContext): UpstreamRequest
 
 function videoResponse(raw: unknown, _ctx: ProviderCallContext, info: VideoResponseContext): unknown {
   if (!isRecord(raw)) throw errors.upstreamError('Agnes returned invalid video metadata.')
-  if (!['queued', 'in_progress', 'completed', 'failed'].includes(String(raw.status))) {
+  // 查询接口用 pending / processing / succeeded 等状态；这里只校验形状，
+  // 具体状态由 normalizeVideoResponse 统一映射，避免把排队中的任务误判为 502。
+  if (typeof raw.status !== 'string' || raw.status === '') {
     throw errors.upstreamError('Agnes returned invalid video status metadata.')
   }
   const address = info.videoId ? videoAddress(info.videoId) : undefined

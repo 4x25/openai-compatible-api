@@ -218,7 +218,7 @@ export async function fetchWithTimeout(
   const controller = new AbortController()
   const timer = setTimeout(() => {
     controller.abort(new GatewayError(`Upstream timeout after ${timeoutMs}ms`, {
-      status: 504,
+      status: 503,
       type: 'api_error',
       code: 'upstream_timeout',
     }))
@@ -291,7 +291,7 @@ export async function parseJsonBody(res: Response): Promise<unknown | null> {
   }
 }
 
-/** 上游正文断连属于 502，客户端取消仍保留 499，限额错误原样保留。 */
+/** 上游正文断连属于 503，客户端取消仍保留 499，限额错误原样保留。 */
 export async function readUpstreamBytes(
   ctx: ProviderCallContext,
   res: Response,

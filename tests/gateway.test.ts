@@ -509,10 +509,10 @@ describe('上游错误抹平', () => {
     expect(body.error.param).toBeNull()
   })
 
-  it('纯文本 502 -> 502 OpenAI 错误', async () => {
+  it('纯文本 502 -> 503 OpenAI 错误', async () => {
     const { app } = makeApp(() => new Response('error code: 502', { status: 502, headers: { 'content-type': 'text/plain' } }))
     const res = await app.request('/mock/v1/chat/completions', chatReq)
-    expect(res.status).toBe(502)
+    expect(res.status).toBe(503)
     const body = await res.json()
     expect(body.error.message).toContain('error code: 502')
     expect(body.error.type).toBe('api_error')

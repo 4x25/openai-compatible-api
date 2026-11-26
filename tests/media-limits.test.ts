@@ -17,7 +17,7 @@ registerProvider({
 const context = {} as ProviderCallContext
 
 describe('媒体边界和取消', () => {
-  it.each(['images/generations', 'videos'])('上游正文断连返回 502，不是内部 500：%s', async (endpoint) => {
+  it.each(['images/generations', 'videos'])('上游正文断连返回 503，不是内部 500：%s', async (endpoint) => {
     const app = createGatewayApp({ env: {}, fetch: (async () => new Response(new ReadableStream<Uint8Array>({
       start(controller) { controller.error(new Error('private transport failure')) },
     }), { headers: { 'content-type': 'application/json' } })) as typeof fetch })
@@ -25,7 +25,7 @@ describe('媒体边界和取消', () => {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: endpoint === 'videos' ? 'agnes-video-2.5-flash' : 'agnes-image-2.5-flash', prompt: 'test' }),
     })
-    expect(res.status).toBe(502)
+    expect(res.status).toBe(503)
     const body = await res.json()
     expect(body.error.code).toBe('upstream_error')
     expect(body.error.message).not.toContain('private transport failure')
@@ -87,7 +87,7 @@ describe('媒体边界和取消', () => {
     const res = await app.request('/mockmedialimits/v1/images/generations', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'test', prompt: 'test' }),
     })
-    expect(res.status).toBe(502)
+    expect(res.status).toBe(503)
     expect(cancelled).toBe(true)
   })
 
@@ -125,7 +125,7 @@ describe('媒体边界和取消', () => {
     })).toBe('https://example.com/prefix/v1/task?tenant=test&video_id=one%2Ftwo&model_name=flash')
   })
 
-  it('超时映射 504 并中断上游', async () => {
+  it('超时映射 503 并中断上游', async () => {
     vi.useFakeTimers()
     try {
       let signal: AbortSignal | undefined
@@ -138,7 +138,7 @@ describe('媒体边界和取消', () => {
       })
       await vi.advanceTimersByTimeAsync(1001)
       const res = await response
-      expect(res.status).toBe(504)
+      expect(res.status).toBe(503)
       expect((await res.json()).error.code).toBe('upstream_timeout')
       expect(signal?.aborted).toBe(true)
     } finally { vi.useRealTimers() }
